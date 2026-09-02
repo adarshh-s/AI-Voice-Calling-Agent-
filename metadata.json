@@ -1,0 +1,7 @@
+{
+  "name": "AI Voice Calling Agent",
+  "description": "Simple AI voice-calling agent with Google Sheets, Google Calendar, n8n automation workflow, and live interactive call simulator.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

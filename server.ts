@@ -10,7 +10,22 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+
+// In-Memory Logs / Webhook Dispatch Records for Production Audit
+interface WebhookDispatchLog {
+  id: string;
+  leadId: string;
+  leadName: string;
+  phone: string;
+  timestamp: string;
+  targetUrl: string;
+  status: 'delivered' | 'failed';
+  responseStatus?: number;
+  payload: Record<string, unknown>;
+}
+
+const dispatchLogs: WebhookDispatchLog[] = [];
 
 // Initialize Gemini Client
 let aiClient: GoogleGenAI | null = null;
@@ -136,6 +151,7 @@ app.post('/api/ai/call-turn', async (req, res) => {
     const company = lead?.company || 'Company';
     const callerCompany = agentSettings?.companyName || 'Apex AI Solutions';
     const offering = agentSettings?.serviceDescription || 'AI-powered workflow automation and customer intelligence solutions';
+    const customPrompt = agentSettings?.customSystemPrompt ? `\nSPECIAL USER INSTRUCTIONS:\n${agentSettings.customSystemPrompt}\n` : '';
 
     const slotsText = (availableSlots || [])
       .filter((s: { available: boolean }) => s.available)
@@ -143,7 +159,7 @@ app.post('/api/ai/call-turn', async (req, res) => {
       .map((s: { date: string; time: string }) => `${s.date} at ${s.time}`)
       .join(', ') || 'Thursday at 10:00 AM or Friday at 3:00 PM';
 
-    const systemInstruction = `You are Alex, an AI voice calling assistant calling on behalf of ${callerCompany}.
+    const systemInstruction = `You are ${agentSettings?.agentName || 'Alex'}, an AI voice calling assistant calling on behalf of ${callerCompany}.
 You are on a live phone call with ${clientName} from ${company}.
 
 CALL OBJECTIVE & BEHAVIOR:
@@ -159,7 +175,7 @@ CALL OBJECTIVE & BEHAVIOR:
    - If they say "Not interested": Warmly say "Understood, thank you so much for your time. Have a great day!" and call 'end_call'.
    - If they say "Don't call me again" / "Remove my number": Respectfully say "I understand completely, I will update our records immediately so you won't be contacted again. Have a good day.", call 'update_call_status' with status 'Do Not Contact', and call 'end_call'.
    - Answer simple questions about ${callerCompany}. If unsure, say our specialist can cover that during the quick demo call.
-
+${customPrompt}
 Available open Google Calendar slots right now: ${slotsText}.
 `;
 
@@ -172,20 +188,20 @@ Available open Google Calendar slots right now: ${slotsText}.
       if (!messages || messages.length === 0) {
         reply = `Hi, may I speak with ${clientName}?`;
       } else if (lastUserMsg.includes('speaking') || lastUserMsg.includes('yes') || lastUserMsg.includes('this is')) {
-        reply = `Hi ${clientName}, I'm Alex calling on behalf of ${callerCompany}. I'll keep this very brief. We're reaching out to see if you'd be interested in learning about our automated AI workflows. Do you have a quick minute?`;
+        reply = `Hi ${clientName}, I'm ${agentSettings?.agentName || 'Alex'} calling on behalf of ${callerCompany}. I'll keep this very brief. We're reaching out to see if you'd be interested in learning about our automated AI workflows. Do you have a quick minute?`;
       } else if (lastUserMsg.includes('busy') || lastUserMsg.includes('can\'t talk') || lastUserMsg.includes('later')) {
         reply = `No problem at all! Would you prefer that we schedule a quick 10-minute meeting at a more convenient time?`;
       } else if (lastUserMsg.includes('not interested') || lastUserMsg.includes('no thanks') || lastUserMsg.includes('stop')) {
         reply = `Understood, thank you for your time. Have a wonderful day!`;
         functionCall = {
           name: 'end_call',
-          args: { reason: 'not_interested', farewellMessage: 'Understood, thank you for your time. Have a wonderful day!' }
+          args: { reason: 'not_interested', farewellMessage: 'Understood, thank you for your time. Have a wonderful day!' },
         };
       } else if (lastUserMsg.includes('remove') || lastUserMsg.includes('do not contact')) {
         reply = `I completely understand. I'm removing your number from our contact list right now. Have a good day.`;
         functionCall = {
           name: 'update_call_status',
-          args: { status: 'Do Not Contact', callResult: 'Do Not Contact', notes: 'Client requested removal from call list.' }
+          args: { status: 'Do Not Contact', callResult: 'Do Not Contact', notes: 'Client requested removal from call list.' },
         };
       } else if (lastUserMsg.includes('sure') || lastUserMsg.includes('interested') || lastUserMsg.includes('tell me more') || lastUserMsg.includes('yes')) {
         reply = `Great! We have Tuesday at 11 AM or Wednesday at 3 PM available for a quick 15-minute demo. Which works better for you?`;
@@ -198,8 +214,8 @@ Available open Google Calendar slots right now: ${slotsText}.
             time: '11:00 AM',
             clientName: clientName,
             clientEmail: lead?.email,
-            meetingNotes: 'Demo call scheduled via AI voice agent'
-          }
+            meetingNotes: 'Demo call scheduled via AI voice agent',
+          },
         };
       } else {
         reply = `I understand. We help teams automate repetitive workflows with AI. Would you be open to a quick 10-minute overview this week?`;
@@ -213,7 +229,6 @@ Available open Google Calendar slots right now: ${slotsText}.
     }
 
     // Call Gemini 3.7 Flash
-    // Format conversation history for Gemini
     const contents = (messages || []).map((m: { role: string; content: string }) => ({
       role: m.role === 'agent' ? 'model' : 'user',
       parts: [{ text: m.content }],
@@ -231,7 +246,7 @@ Available open Google Calendar slots right now: ${slotsText}.
       contents,
       config: {
         systemInstruction,
-        temperature: 0.2,
+        temperature: agentSettings?.temperature || 0.2,
         tools: [
           {
             functionDeclarations: [
@@ -315,6 +330,92 @@ Return a strict JSON object with:
     console.error('Analysis error:', err);
     res.status(500).json({ error: 'Failed to analyze call' });
   }
+});
+
+// API Route: Calendar Booking & Google Meet Link Generator
+app.post('/api/calendar/book', async (req, res) => {
+  try {
+    const { slotId, date, time, lead, meetingNotes } = req.body;
+    const meetCode = `${Math.random().toString(36).substring(2, 5)}-${Math.random().toString(36).substring(2, 6)}-${Math.random().toString(36).substring(2, 5)}`;
+    const meetLink = `https://meet.google.com/${meetCode}`;
+
+    res.json({
+      success: true,
+      bookingId: `gcal-${Date.now()}`,
+      meetLink,
+      date,
+      time,
+      clientName: lead?.name,
+      clientEmail: lead?.email,
+      confirmedAt: new Date().toISOString(),
+    });
+  } catch (error: unknown) {
+    const err = error as { message?: string };
+    res.status(500).json({ error: err.message || 'Failed to book calendar slot' });
+  }
+});
+
+// API Route: Webhook Dispatcher (n8n / CRM / Custom HTTP)
+app.post('/api/telephony/dispatch-webhook', async (req, res) => {
+  try {
+    const { webhookUrl, lead, event, details } = req.body;
+
+    if (!webhookUrl) {
+      return res.status(400).json({ error: 'webhookUrl is required' });
+    }
+
+    const payload = {
+      event: event || 'lead_call_trigger',
+      timestamp: new Date().toISOString(),
+      lead,
+      details: details || {},
+    };
+
+    let delivered = false;
+    let responseStatus = 200;
+
+    try {
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      responseStatus = response.status;
+      delivered = response.ok;
+    } catch (e) {
+      delivered = false;
+      responseStatus = 500;
+    }
+
+    const logEntry: WebhookDispatchLog = {
+      id: `disp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      leadId: lead?.id || 'unknown',
+      leadName: lead?.name || 'Lead',
+      phone: lead?.phone || '',
+      timestamp: new Date().toISOString(),
+      targetUrl: webhookUrl,
+      status: delivered ? 'delivered' : 'failed',
+      responseStatus,
+      payload,
+    };
+
+    dispatchLogs.unshift(logEntry);
+    if (dispatchLogs.length > 50) dispatchLogs.pop();
+
+    res.json({
+      success: delivered,
+      status: responseStatus,
+      logEntry,
+    });
+  } catch (error: unknown) {
+    const err = error as { message?: string };
+    res.status(500).json({ error: err.message || 'Failed to dispatch webhook' });
+  }
+});
+
+// API Route: Get Webhook Dispatch Logs
+app.get('/api/telephony/dispatch-logs', (req, res) => {
+  res.json({ logs: dispatchLogs });
 });
 
 // Health Endpoint

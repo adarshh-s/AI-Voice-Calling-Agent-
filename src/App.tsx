@@ -27,10 +27,28 @@ export default function App() {
   // Leads State with LocalStorage Persistence
   const [leads, setLeads] = useState<Lead[]>(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('ai_agent_leads_v2');
+      try {
+        localStorage.removeItem('ai_agent_leads_v2');
+      } catch {}
+      const saved = localStorage.getItem('ai_agent_leads_v3');
       if (saved) {
         try {
-          return JSON.parse(saved);
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            // Ensure no legacy personal phone number remains
+            return parsed.map((l: Lead) => {
+              if (l.name?.toLowerCase().includes('adarsh') || l.phone?.includes('9061584951')) {
+                return {
+                  ...l,
+                  name: 'Alex Morgan',
+                  phone: '+919876543211',
+                  rawPhone: '9876543211',
+                  email: 'alex.morgan@acmesolutions.example',
+                };
+              }
+              return l;
+            });
+          }
         } catch {}
       }
     }
@@ -85,7 +103,7 @@ export default function App() {
 
   // Sync to LocalStorage
   useEffect(() => {
-    localStorage.setItem('ai_agent_leads_v2', JSON.stringify(leads));
+    localStorage.setItem('ai_agent_leads_v3', JSON.stringify(leads));
   }, [leads]);
 
   useEffect(() => {

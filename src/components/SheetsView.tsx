@@ -250,7 +250,7 @@ export const SheetsView: React.FC<SheetsViewProps> = ({
               <input
                 type="text"
                 required
-                placeholder="e.g. Adarsh"
+                placeholder="e.g. Alex Morgan"
                 value={newLead.name}
                 onChange={(e) => setNewLead({ ...newLead, name: e.target.value })}
                 className="w-full bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl px-3 py-2 text-xs text-[#2D2926] placeholder-[#8C847C] focus:outline-none focus:ring-2 focus:ring-[#8BA888]/30"
@@ -273,7 +273,7 @@ export const SheetsView: React.FC<SheetsViewProps> = ({
               <input
                 type="text"
                 required
-                placeholder="e.g. 9061584951 or +919061584951"
+                placeholder="e.g. +919876543210 or 9876543210"
                 value={newLead.phone}
                 onChange={(e) => setNewLead({ ...newLead, phone: e.target.value })}
                 className="w-full bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl px-3 py-2 text-xs text-[#2D2926] placeholder-[#8C847C] focus:outline-none focus:ring-2 focus:ring-[#8BA888]/30"
@@ -284,7 +284,7 @@ export const SheetsView: React.FC<SheetsViewProps> = ({
               <label className="block text-xs font-semibold text-[#4A443F] mb-1">Email</label>
               <input
                 type="email"
-                placeholder="e.g. adarshs8400@gmail.com"
+                placeholder="e.g. alex.m@company.com"
                 value={newLead.email}
                 onChange={(e) => setNewLead({ ...newLead, email: e.target.value })}
                 className="w-full bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl px-3 py-2 text-xs text-[#2D2926] placeholder-[#8C847C] focus:outline-none focus:ring-2 focus:ring-[#8BA888]/30"

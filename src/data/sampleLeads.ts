@@ -3,11 +3,11 @@ import { Lead, CalendarSlot, AgentSettings } from '../types';
 export const INITIAL_LEADS: Lead[] = [
   {
     id: 'lead-1',
-    name: 'Adarsh S',
+    name: 'Alex Morgan',
     company: 'Acme AI Solutions',
-    phone: '+919061584951',
-    rawPhone: '9061584951',
-    email: 'adarshs8400@gmail.com',
+    phone: '+919876543211',
+    rawPhone: '9876543211',
+    email: 'alex.morgan@acmesolutions.example',
     status: 'Pending',
     callResult: '',
     meetingDate: '',

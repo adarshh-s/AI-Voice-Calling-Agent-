@@ -131,7 +131,7 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
   const downloadSampleExcel = () => {
     const csvContent =
       'Name,Company,Phone,Email,Notes\n' +
-      'Adarsh,Acme AI Solutions,9061584951,adarshs8400@gmail.com,Interested in automated voice dialer\n' +
+      'Alex Morgan,Acme AI Solutions,9876543211,alex.morgan@acmesolutions.example,Interested in automated voice dialer\n' +
       'John Doe,Global Logistics,+15551234567,john@globallogistics.com,Follow-up demo for Q3\n' +
       'Sarah Connor,Cyberdyne Systems,+447911123456,sarah@cyberdyne.org,Requested pricing overview\n' +
       'Rajesh Kumar,TechCorp India,9876543210,rajesh@techcorp.in,Wants afternoon slot\n';

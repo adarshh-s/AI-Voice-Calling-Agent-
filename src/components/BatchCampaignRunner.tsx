@@ -30,6 +30,7 @@ import {
   TranscriptMessage,
   CallStage,
 } from '../types';
+import { executeCallTurn } from '../utils/aiCallEngine';
 
 interface BatchCampaignRunnerProps {
   leads: Lead[];
@@ -286,17 +287,7 @@ export const BatchCampaignRunner: React.FC<BatchCampaignRunnerProps> = ({
 
       // Turn 1: AI Greeting
       try {
-        const turn1Res = await fetch('/api/ai/call-turn', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages: [],
-            lead,
-            agentSettings,
-            availableSlots,
-          }),
-        });
-        const turn1Data = await turn1Res.json();
+        const turn1Data = await executeCallTurn([], lead, agentSettings, availableSlots);
         const greeting = turn1Data.reply || `Hi, may I speak with ${lead.name}?`;
 
         const msg1: TranscriptMessage = {
@@ -348,17 +339,7 @@ export const BatchCampaignRunner: React.FC<BatchCampaignRunnerProps> = ({
 
       // AI Turn 2: Value proposition & ask for demo
       try {
-        const turn2Res = await fetch('/api/ai/call-turn', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages: updatedHistory1,
-            lead,
-            agentSettings,
-            availableSlots,
-          }),
-        });
-        const turn2Data = await turn2Res.json();
+        const turn2Data = await executeCallTurn(updatedHistory1, lead, agentSettings, availableSlots);
         const aiPitch =
           turn2Data.reply ||
           `Hi ${lead.name}, I'm ${agentSettings.agentName} from ${agentSettings.companyName}. We help teams automate lead calling directly from spreadsheets. Do you have 10 minutes for a quick demo this week?`;

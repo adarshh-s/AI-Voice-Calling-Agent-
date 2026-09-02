@@ -21,6 +21,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { Lead, CalendarSlot, AgentSettings, TranscriptMessage, CallStage } from '../types';
+import { executeCallTurn, executeCallAnalysis } from '../utils/aiCallEngine';
 
 interface CallSimulatorProps {
   leads: Lead[];
@@ -166,18 +167,7 @@ export const CallSimulator: React.FC<CallSimulatorProps> = ({
 
       // First Turn: Opening greeting
       try {
-        const res = await fetch('/api/ai/call-turn', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages: [],
-            lead: currentLead,
-            agentSettings,
-            availableSlots,
-          }),
-        });
-
-        const data = await res.json();
+        const data = await executeCallTurn([], currentLead, agentSettings, availableSlots);
         const greeting = data.reply || `Hi, may I speak with ${currentLead.name}?`;
 
         const newMsg: TranscriptMessage = {
@@ -230,18 +220,7 @@ export const CallSimulator: React.FC<CallSimulatorProps> = ({
     setStatusLog('AI is listening & generating response...');
 
     try {
-      const res = await fetch('/api/ai/call-turn', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: updatedTranscript,
-          lead: currentLead,
-          agentSettings,
-          availableSlots,
-        }),
-      });
-
-      const data = await res.json();
+      const data = await executeCallTurn(updatedTranscript, currentLead, agentSettings, availableSlots);
       const reply = data.reply || 'Thank you for your response.';
       const functionCall = data.functionCall;
 
@@ -256,7 +235,7 @@ export const CallSimulator: React.FC<CallSimulatorProps> = ({
           const args = functionCall.args || {};
           const slot = availableSlots.find((s) => s.available) || availableSlots[0];
           if (slot) {
-            onBookCalendarSlot(slot.id, currentLead, args.meetingNotes || 'Scheduled via AI voice agent');
+            onBookCalendarSlot(slot.id, currentLead, (args.meetingNotes as string) || 'Scheduled via AI voice agent');
           }
           actionDesc = `Booked Google Meet: ${args.date || 'Upcoming'} at ${args.time || 'Confirmed'}`;
           setLastAction(actionDesc);
@@ -318,15 +297,7 @@ export const CallSimulator: React.FC<CallSimulatorProps> = ({
 
     // Run post-call analysis
     try {
-      const res = await fetch('/api/ai/analyze-call', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          transcript,
-          lead: currentLead,
-        }),
-      });
-      const analysis = await res.json();
+      const analysis = await executeCallAnalysis(transcript, currentLead);
 
       if (analysis && analysis.status) {
         onUpdateLead({

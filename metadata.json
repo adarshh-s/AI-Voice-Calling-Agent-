@@ -1,7 +1,6 @@
 {
-  "name": "AI Voice Calling Agent",
-  "description": "Simple AI voice-calling agent with Google Sheets, Google Calendar, n8n automation workflow, and live interactive call simulator.",
+  "name": "AutoDialer AI Platform",
+  "description": "Enterprise automated AI outbound calling platform that ingests Excel spreadsheets, sanitizes client phone numbers to E.164, runs automated voice calls, and books Google Calendar meetings.",
   "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
-

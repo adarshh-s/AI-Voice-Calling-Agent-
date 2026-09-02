@@ -1,18 +1,21 @@
 export type LeadStatus =
   | 'Pending'
+  | 'In Progress'
   | 'Contacted'
   | 'Interested'
   | 'Not Interested'
   | 'No Answer'
   | 'Meeting Scheduled'
   | 'Do Not Contact'
-  | 'Invalid Number';
+  | 'Invalid Number'
+  | 'Failed';
 
 export interface Lead {
   id: string;
   name: string;
   company: string;
   phone: string;
+  rawPhone?: string;
   email: string;
   status: LeadStatus;
   callResult: string;
@@ -20,6 +23,9 @@ export interface Lead {
   meetingTime: string;
   notes: string;
   lastCalled: string;
+  durationSeconds?: number;
+  customFields?: Record<string, string>;
+  isValidPhone: boolean;
 }
 
 export interface CalendarSlot {
@@ -56,6 +62,7 @@ export type CallStage =
 export interface AgentSettings {
   companyName: string;
   serviceDescription: string;
+  targetAudience: string;
   agentName: string;
   voiceName: string;
   speechRate: number;
@@ -64,6 +71,46 @@ export interface AgentSettings {
   interruptible: boolean;
   maxCallDurationSeconds: number;
   customSystemPrompt?: string;
+  defaultCountryCode: string; // e.g. '+91', '+1', '+44'
+  scriptType: 'b2b_sales' | 'lead_qualification' | 'appointment_booking' | 'customer_feedback' | 'custom';
+}
+
+export type TelephonyProvider = 'browser' | 'vapi' | 'retell' | 'twilio' | 'webhook';
+
+export interface TelephonySettings {
+  provider: TelephonyProvider;
+  vapiApiKey?: string;
+  vapiPhoneNumberId?: string;
+  vapiAssistantId?: string;
+  retellApiKey?: string;
+  retellAgentId?: string;
+  twilioAccountSid?: string;
+  twilioAuthToken?: string;
+  twilioPhoneNumber?: string;
+  n8nWebhookUrl?: string;
+}
+
+export interface CampaignState {
+  id: string;
+  name: string;
+  status: 'idle' | 'running' | 'paused' | 'completed';
+  currentIndex: number;
+  totalLeads: number;
+  completedCalls: number;
+  meetingsBooked: number;
+  failedCalls: number;
+  skippedInvalid: number;
+  delayBetweenCallsSeconds: number;
+  autoAdvance: boolean;
+  startedAt?: string;
+}
+
+export interface ColumnMapping {
+  name: string;
+  phone: string;
+  company: string;
+  email: string;
+  notes: string;
 }
 
 export interface CallSummaryResult {

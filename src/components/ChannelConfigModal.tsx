@@ -14,6 +14,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { ChannelApiSettings } from '../types';
+import { sendEmailDirectOrBackend } from '../services/emailService';
 
 interface ChannelConfigModalProps {
   isOpen: boolean;
@@ -48,37 +49,25 @@ export const ChannelConfigModal: React.FC<ChannelConfigModalProps> = ({
     setTestStatus('sending');
     setTestResultMsg('');
     try {
-      const res = await fetch('/api/outreach/send-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          lead: {
-            id: 'test-lead',
-            name: 'Adarsh S',
-            email: testEmailTo,
-          },
-          subject: 'OmniReach AI Live Test: Automated Email Successful!',
-          body: 'Hello Adarsh!\n\nThis is a verified live test from your OmniReach AI outreach system.\n\nYour Resend API connection is active. All automated outreach emails in your batch will be delivered directly to prospective client inboxes.\n\nBest regards,\nOmniReach AI Engine',
-          channelSettings: formData,
-          senderName: 'OmniReach AI',
-          senderEmail: 'onboarding@resend.dev',
-        }),
+      const data = await sendEmailDirectOrBackend({
+        lead: {
+          id: 'test-lead',
+          name: 'Adarsh S',
+          email: testEmailTo,
+        },
+        subject: 'OmniReach AI Live Test: Automated Email Successful!',
+        body: 'Hello Adarsh!\n\nThis is a verified live test from your OmniReach AI outreach system.\n\nYour Resend API connection is active. All automated outreach emails in your batch will be delivered directly to prospective client inboxes.\n\nBest regards,\nOmniReach AI Engine',
+        channelSettings: formData,
+        senderName: 'OmniReach AI',
+        senderEmail: 'onboarding@resend.dev',
       });
-
-      const rawText = await res.text();
-      let data: any = {};
-      try {
-        data = JSON.parse(rawText);
-      } catch {
-        data = { errorDetail: rawText.substring(0, 150) || 'Server returned invalid response' };
-      }
 
       if (data.delivered) {
         setTestStatus('success');
         setTestResultMsg(`Email sent directly to ${testEmailTo}! Check your inbox.`);
       } else {
         setTestStatus('error');
-        setTestResultMsg(data.errorDetail || data.error || 'Failed to deliver email. Please check your API key.');
+        setTestResultMsg(data.errorDetail || 'Failed to deliver email. Please check your API key.');
       }
     } catch (err: any) {
       setTestStatus('error');

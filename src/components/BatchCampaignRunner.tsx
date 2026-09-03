@@ -31,6 +31,7 @@ import {
   generateWhatsAppLink,
   generateMailtoLink,
 } from '../utils/outreachEngine';
+import { sendEmailDirectOrBackend } from '../services/emailService';
 import { DEFAULT_TEMPLATES } from '../data/sampleTemplates';
 
 interface BatchCampaignRunnerProps {
@@ -216,33 +217,23 @@ export const BatchCampaignRunner: React.FC<BatchCampaignRunnerProps> = ({
             window.open(mailLink, '_blank');
           }
 
-          // Trigger backend relay
+          // Trigger email relay (handles both Vercel client-direct and backend server)
           let emDeliveryStatus = 'delivered';
           try {
-            const emRes = await fetch('/api/outreach/send-email', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                lead,
-                subject: personalized.emailSubject,
-                body: personalized.emailBody,
-                channelSettings,
-                senderName: campaignSettings.senderName,
-                senderEmail: campaignSettings.senderEmail,
-                webhookUrl: channelSettings.n8nWebhookUrl,
-              }),
+            const emRes = await sendEmailDirectOrBackend({
+              lead,
+              subject: personalized.emailSubject,
+              body: personalized.emailBody,
+              channelSettings,
+              senderName: campaignSettings.senderName,
+              senderEmail: campaignSettings.senderEmail,
             });
-            const rawEm = await emRes.text();
-            let emData: any = {};
-            try {
-              emData = JSON.parse(rawEm);
-            } catch {
-              emData = {};
-            }
-            if (!emData.delivered) {
+            if (!emRes.delivered) {
               emDeliveryStatus = 'failed';
             }
-          } catch {}
+          } catch {
+            emDeliveryStatus = 'failed';
+          }
 
           newLogs.push({
             id: `log-em-${Date.now()}`,

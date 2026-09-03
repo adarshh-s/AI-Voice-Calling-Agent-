@@ -50,9 +50,10 @@ function getGenAI(): GoogleGenAI | null {
 
 // Helper: Format fallback templates
 function interpolate(
-  template: string,
+  template: string | undefined,
   variables: Record<string, string>
 ): string {
+  if (!template) return '';
   let res = template;
   for (const [k, v] of Object.entries(variables)) {
     res = res.replace(new RegExp(`{{${k}}}`, 'gi'), v || '');
@@ -93,7 +94,8 @@ app.post('/api/outreach/generate-message', async (req, res) => {
     };
 
     if (ai) {
-      const prompt = `You are a world-class B2B copywriter specialized in high-converting WhatsApp messages and cold/warm outreach emails.
+      try {
+        const prompt = `You are a world-class B2B copywriter specialized in high-converting WhatsApp messages and cold/warm outreach emails.
 Generate a personalized WhatsApp message AND Email for this prospect:
 - Client Name: ${lead?.name}
 - Client Company: ${clientCompany}
@@ -114,28 +116,31 @@ Output strict JSON with these 3 keys:
   "emailBody": "Clear, professional, punchy email with greeting, value prop, bullet points, call to action with booking link, and sender sign-off"
 }`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.7-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
-
-      let parsed: { whatsApp?: string; emailSubject?: string; emailBody?: string } = {};
-      try {
-        parsed = JSON.parse(response.text || '{}');
-      } catch {
-        parsed = {};
-      }
-
-      if (parsed.whatsApp && parsed.emailSubject && parsed.emailBody) {
-        return res.json({
-          whatsApp: parsed.whatsApp,
-          emailSubject: parsed.emailSubject,
-          emailBody: parsed.emailBody,
-          isAiGenerated: true,
+        const response = await ai.models.generateContent({
+          model: 'gemini-3.8-flash',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+          },
         });
+
+        let parsed: { whatsApp?: string; emailSubject?: string; emailBody?: string } = {};
+        try {
+          parsed = JSON.parse(response.text || '{}');
+        } catch {
+          parsed = {};
+        }
+
+        if (parsed.whatsApp && parsed.emailSubject && parsed.emailBody) {
+          return res.json({
+            whatsApp: parsed.whatsApp,
+            emailSubject: parsed.emailSubject,
+            emailBody: parsed.emailBody,
+            isAiGenerated: true,
+          });
+        }
+      } catch (aiErr) {
+        console.warn('Gemini generateContent error in server.ts, falling back:', aiErr);
       }
     }
 

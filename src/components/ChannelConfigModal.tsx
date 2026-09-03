@@ -54,23 +54,31 @@ export const ChannelConfigModal: React.FC<ChannelConfigModalProps> = ({
         body: JSON.stringify({
           lead: {
             id: 'test-lead',
-            name: 'Test Recipient',
+            name: 'Adarsh S',
             email: testEmailTo,
           },
           subject: 'OmniReach AI Live Test: Automated Email Successful!',
-          body: 'Hello Adarsh!\n\nThis is a verified live test from your OmniReach AI outreach system.\n\nYour Resend API connection is 100% active and working. All automated outreach emails in your batch will now be delivered directly to prospective client inboxes.\n\nBest regards,\nOmniReach AI Engine',
+          body: 'Hello Adarsh!\n\nThis is a verified live test from your OmniReach AI outreach system.\n\nYour Resend API connection is active. All automated outreach emails in your batch will be delivered directly to prospective client inboxes.\n\nBest regards,\nOmniReach AI Engine',
           channelSettings: formData,
           senderName: 'OmniReach AI',
           senderEmail: 'onboarding@resend.dev',
         }),
       });
-      const data = await res.json();
+
+      const rawText = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = { errorDetail: rawText.substring(0, 150) || 'Server returned invalid response' };
+      }
+
       if (data.delivered) {
         setTestStatus('success');
         setTestResultMsg(`Email sent directly to ${testEmailTo}! Check your inbox.`);
       } else {
         setTestStatus('error');
-        setTestResultMsg(data.errorDetail || data.error || 'Failed to deliver email. Check API key.');
+        setTestResultMsg(data.errorDetail || data.error || 'Failed to deliver email. Please check your API key.');
       }
     } catch (err: any) {
       setTestStatus('error');

@@ -232,7 +232,13 @@ export const BatchCampaignRunner: React.FC<BatchCampaignRunnerProps> = ({
                 webhookUrl: channelSettings.n8nWebhookUrl,
               }),
             });
-            const emData = await emRes.json();
+            const rawEm = await emRes.text();
+            let emData: any = {};
+            try {
+              emData = JSON.parse(rawEm);
+            } catch {
+              emData = {};
+            }
             if (!emData.delivered) {
               emDeliveryStatus = 'failed';
             }

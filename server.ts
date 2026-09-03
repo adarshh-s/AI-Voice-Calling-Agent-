@@ -394,7 +394,7 @@ app.post('/api/outreach/send-email', async (req, res) => {
         const resendRes = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${channelSettings.emailApiKey}`,
+            Authorization: `Bearer ${channelSettings.emailApiKey.trim()}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
@@ -406,12 +406,19 @@ app.post('/api/outreach/send-email', async (req, res) => {
           }),
         });
 
-        const resendData = await resendRes.json();
+        const resendText = await resendRes.text();
+        let resendData: any = {};
+        try {
+          resendData = JSON.parse(resendText);
+        } catch {
+          resendData = { message: resendText };
+        }
+
         if (resendRes.ok && resendData.id) {
           delivered = true;
           providerResponse = { provider: 'resend', id: resendData.id };
         } else {
-          errorDetail = resendData.message || 'Resend API returned an error';
+          errorDetail = resendData.message || resendData.error || 'Resend API returned an error';
           providerResponse = resendData;
         }
       } catch (err: any) {
@@ -424,7 +431,7 @@ app.post('/api/outreach/send-email', async (req, res) => {
         const sgRes = await fetch('https://api.sendgrid.com/v3/mail/send', {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${channelSettings.emailApiKey}`,
+            Authorization: `Bearer ${channelSettings.emailApiKey.trim()}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
@@ -435,12 +442,19 @@ app.post('/api/outreach/send-email', async (req, res) => {
           }),
         });
 
+        const sgText = await sgRes.text();
+        let sgData: any = {};
+        try {
+          sgData = JSON.parse(sgText);
+        } catch {
+          sgData = { message: sgText };
+        }
+
         if (sgRes.status === 202 || sgRes.ok) {
           delivered = true;
           providerResponse = { provider: 'sendgrid', status: 'queued_accepted' };
         } else {
-          const sgData = await sgRes.json().catch(() => ({}));
-          errorDetail = sgData.errors?.[0]?.message || 'SendGrid API returned an error';
+          errorDetail = sgData.errors?.[0]?.message || sgData.message || 'SendGrid API returned an error';
           providerResponse = sgData;
         }
       } catch (err: any) {

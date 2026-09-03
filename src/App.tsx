@@ -22,7 +22,7 @@ import { DEFAULT_TEMPLATES, DEFAULT_CAMPAIGN_SETTINGS } from './data/sampleTempl
 
 const DEFAULT_CHANNEL_SETTINGS: ChannelApiSettings = {
   whatsAppProvider: 'web_direct',
-  emailProvider: 'mailto_direct',
+  emailProvider: 'resend',
   twilioAccountSid: '',
   twilioAuthToken: '',
   emailApiKey: '',

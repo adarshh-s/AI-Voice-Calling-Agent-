@@ -386,6 +386,11 @@ app.post('/api/outreach/send-email', async (req, res) => {
     // 1. Resend API
     if (provider === 'resend' && channelSettings?.emailApiKey) {
       try {
+        // Resend free test sandbox requires onboarding@resend.dev as the from domain unless custom domain verified
+        const resendFrom = fromAddress.includes('@resend.dev') || !fromAddress.includes('@')
+          ? `${fromName} <onboarding@resend.dev>`
+          : `${fromName} <${fromAddress}>`;
+
         const resendRes = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: {
@@ -393,7 +398,7 @@ app.post('/api/outreach/send-email', async (req, res) => {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            from: `${fromName} <${fromAddress}>`,
+            from: resendFrom,
             to: [lead?.email],
             subject: subject || 'Meeting Request',
             text: body || '',

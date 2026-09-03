@@ -10,6 +10,8 @@ import {
   HelpCircle,
   Shield,
   Zap,
+  Send,
+  Loader2,
 } from 'lucide-react';
 import { ChannelApiSettings } from '../types';
 
@@ -27,10 +29,54 @@ export const ChannelConfigModal: React.FC<ChannelConfigModalProps> = ({
   onSaveSettings,
 }) => {
   const [formData, setFormData] = useState<ChannelApiSettings>(settings);
-  const [activeSubTab, setActiveSubTab] = useState<'whatsapp' | 'email' | 'n8n'>('whatsapp');
+  const [activeSubTab, setActiveSubTab] = useState<'whatsapp' | 'email' | 'n8n'>('email');
   const [savedSuccess, setSavedSuccess] = useState(false);
+  
+  // Test email state
+  const [testEmailTo, setTestEmailTo] = useState('adarshs8400@gmail.com');
+  const [testStatus, setTestStatus] = useState<'idle' | 'sending' | 'success' | 'error'>('idle');
+  const [testResultMsg, setTestResultMsg] = useState('');
 
   if (!isOpen) return null;
+
+  const handleSendTestEmail = async () => {
+    if (!formData.emailApiKey) {
+      setTestStatus('error');
+      setTestResultMsg('Please enter an API Key first');
+      return;
+    }
+    setTestStatus('sending');
+    setTestResultMsg('');
+    try {
+      const res = await fetch('/api/outreach/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lead: {
+            id: 'test-lead',
+            name: 'Test Recipient',
+            email: testEmailTo,
+          },
+          subject: 'OmniReach AI Live Test: Automated Email Successful!',
+          body: 'Hello Adarsh!\n\nThis is a verified live test from your OmniReach AI outreach system.\n\nYour Resend API connection is 100% active and working. All automated outreach emails in your batch will now be delivered directly to prospective client inboxes.\n\nBest regards,\nOmniReach AI Engine',
+          channelSettings: formData,
+          senderName: 'OmniReach AI',
+          senderEmail: 'onboarding@resend.dev',
+        }),
+      });
+      const data = await res.json();
+      if (data.delivered) {
+        setTestStatus('success');
+        setTestResultMsg(`Email sent directly to ${testEmailTo}! Check your inbox.`);
+      } else {
+        setTestStatus('error');
+        setTestResultMsg(data.errorDetail || data.error || 'Failed to deliver email. Check API key.');
+      }
+    } catch (err: any) {
+      setTestStatus('error');
+      setTestResultMsg(err.message || 'Connection failed');
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -310,6 +356,54 @@ export const ChannelConfigModal: React.FC<ChannelConfigModalProps> = ({
                         ? '💡 Free tier: Grab an API key from resend.com to send automated emails directly to inboxes.'
                         : '💡 Obtain your API key from app.sendgrid.com with Mail Send permissions.'}
                     </p>
+                  </div>
+
+                  {/* Instant Test Email Box */}
+                  <div className="pt-2 border-t border-[#EAE5DC]">
+                    <label className="block text-[11px] font-semibold text-[#2D2926] mb-1">
+                      Test Live Email Delivery (Instant)
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="email"
+                        placeholder="your-email@gmail.com"
+                        value={testEmailTo}
+                        onChange={(e) => setTestEmailTo(e.target.value)}
+                        className="flex-1 bg-white border border-[#DDD6CB] rounded-lg px-3 py-1.5 text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleSendTestEmail}
+                        disabled={testStatus === 'sending'}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg text-white bg-[#128C7E] hover:bg-[#0E6D62] disabled:opacity-50 transition-colors shadow-xs shrink-0"
+                      >
+                        {testStatus === 'sending' ? (
+                          <>
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            <span>Sending...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Send className="w-3 h-3" />
+                            <span>Send Live Test</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {testStatus === 'success' && (
+                      <div className="mt-2 p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>{testResultMsg}</span>
+                      </div>
+                    )}
+
+                    {testStatus === 'error' && (
+                      <div className="mt-2 p-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-[11px] flex items-start gap-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 text-red-500 shrink-0 mt-0.5" />
+                        <span>{testResultMsg}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

@@ -30,11 +30,14 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     // 1. Resend API
     if (provider === 'resend' && apiKey) {
       try {
-        const resendFrom = fromAddress.includes('@resend.dev') || !fromAddress.includes('@')
-          ? `${fromName} <onboarding@resend.dev>`
-          : `${fromName} <${fromAddress}>`;
+        let resendFrom = `${fromName} <onboarding@resend.dev>`;
+        if (channelSettings?.resendFromEmail && !channelSettings.resendFromEmail.includes('.example') && channelSettings.resendFromEmail.includes('@')) {
+          resendFrom = `${fromName} <${channelSettings.resendFromEmail.trim()}>`;
+        } else if (fromAddress && !fromAddress.includes('.example') && fromAddress.includes('@') && !fromAddress.includes('apexgrowth')) {
+          resendFrom = `${fromName} <${fromAddress.trim()}>`;
+        }
 
-        const resendRes = await fetch('https://api.resend.com/emails', {
+        let resendRes = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${apiKey}`,
@@ -49,12 +52,39 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
           }),
         });
 
-        const resendText = await resendRes.text();
+        let resendText = await resendRes.text();
         let resendData: any = {};
         try {
           resendData = JSON.parse(resendText);
         } catch {
           resendData = { message: resendText };
+        }
+
+        // Automatic fallback: If custom domain is unverified, retry with onboarding@resend.dev
+        if (!resendRes.ok && (resendData.message?.toLowerCase().includes('domain') || resendData.message?.toLowerCase().includes('verify') || resendData.name === 'validation_error')) {
+          if (!resendFrom.includes('onboarding@resend.dev')) {
+            const fallbackRes = await fetch('https://api.resend.com/emails', {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                from: `${fromName} <onboarding@resend.dev>`,
+                to: [lead?.email],
+                subject: subject || 'Meeting Request',
+                text: body || '',
+                html: (body || '').replace(/\n/g, '<br/>'),
+              }),
+            });
+            const fallbackText = await fallbackRes.text();
+            try {
+              resendData = JSON.parse(fallbackText);
+            } catch {
+              resendData = { message: fallbackText };
+            }
+            resendRes = fallbackRes;
+          }
         }
 
         if (resendRes.ok && (resendData.id || resendRes.status === 200 || resendRes.status === 201)) {

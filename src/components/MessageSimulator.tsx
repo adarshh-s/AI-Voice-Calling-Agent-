@@ -15,14 +15,17 @@ import {
   Copy,
   Check,
   Zap,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
-import { Lead, CalendarSlot, CampaignSettings, MessageTemplate, ChatMessage } from '../types';
+import { Lead, CalendarSlot, CampaignSettings, MessageTemplate, ChatMessage, ChannelApiSettings } from '../types';
 import {
   generateAIPersonalizedMessage,
   generateAIAutoReply,
   generateWhatsAppLink,
   generateMailtoLink,
 } from '../utils/outreachEngine';
+import { sendEmailDirectOrBackend } from '../services/emailService';
 
 interface MessageSimulatorProps {
   leads: Lead[];
@@ -30,6 +33,7 @@ interface MessageSimulatorProps {
   onSelectLead: (leadId: string) => void;
   availableSlots: CalendarSlot[];
   campaignSettings: CampaignSettings;
+  channelSettings?: ChannelApiSettings;
   templates: MessageTemplate[];
   onUpdateLead: (lead: Lead) => void;
   onBookCalendarSlot: (slotId: string, lead: Lead, notes: string) => void;
@@ -41,6 +45,7 @@ export const MessageSimulator: React.FC<MessageSimulatorProps> = ({
   onSelectLead,
   availableSlots,
   campaignSettings,
+  channelSettings,
   templates,
   onUpdateLead,
   onBookCalendarSlot,
@@ -48,6 +53,9 @@ export const MessageSimulator: React.FC<MessageSimulatorProps> = ({
   const [activeChannel, setActiveChannel] = useState<'whatsapp' | 'email'>('whatsapp');
   const [isGenerating, setIsGenerating] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isSendingLiveEmail, setIsSendingLiveEmail] = useState(false);
+  const [sendResultStatus, setSendResultStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [sendResultMessage, setSendResultMessage] = useState('');
 
   // Active Lead
   const lead = leads.find((l) => l.id === selectedLeadId) || leads[0];
@@ -163,6 +171,47 @@ export const MessageSimulator: React.FC<MessageSimulatorProps> = ({
         status: 'Interested',
         whatsAppStatus: 'Replied',
       });
+    }
+  };
+
+  const handleSendLiveEmailNow = async () => {
+    if (!lead || !lead.email) return;
+    setIsSendingLiveEmail(true);
+    setSendResultStatus('idle');
+    setSendResultMessage('');
+
+    try {
+      const resolvedSenderEmail = channelSettings?.resendFromEmail ||
+        (channelSettings?.emailProvider === 'resend' && (!campaignSettings.senderEmail || campaignSettings.senderEmail.includes('.example'))
+          ? 'onboarding@resend.dev'
+          : campaignSettings.senderEmail || 'onboarding@resend.dev');
+
+      const res = await sendEmailDirectOrBackend({
+        lead,
+        subject: emailSubject,
+        body: emailBody,
+        channelSettings: channelSettings || { emailProvider: 'resend' },
+        senderName: campaignSettings.senderName,
+        senderEmail: resolvedSenderEmail,
+      });
+
+      if (res.delivered) {
+        setSendResultStatus('success');
+        setSendResultMessage(`Email successfully dispatched to ${lead.email}! Check inbox.`);
+        onUpdateLead({
+          ...lead,
+          emailStatus: 'Sent',
+          lastContacted: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        });
+      } else {
+        setSendResultStatus('error');
+        setSendResultMessage(res.errorDetail || 'Failed to dispatch email. Check API key in settings.');
+      }
+    } catch (err: any) {
+      setSendResultStatus('error');
+      setSendResultMessage(err.message || 'Delivery error');
+    } finally {
+      setIsSendingLiveEmail(false);
     }
   };
 
@@ -462,12 +511,32 @@ export const MessageSimulator: React.FC<MessageSimulatorProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSendLiveEmailNow}
+                disabled={isSendingLiveEmail || !lead.email}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#128C7E] text-white text-xs font-semibold shadow-xs hover:bg-[#0E6D62] disabled:opacity-50 transition-colors"
+                title="Dispatch directly to lead's inbox via Resend"
+              >
+                {isSendingLiveEmail ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Dispatching...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Send Live to Inbox</span>
+                  </>
+                )}
+              </button>
+
               <a
                 href={generateMailtoLink(lead.email, emailSubject, emailBody)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#4285F4] text-white text-xs font-semibold shadow-xs hover:bg-[#3367D6]"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#FAF8F5] text-[#4A443F] border border-[#DDD6CB] text-xs font-semibold shadow-xs hover:bg-[#F2EFE9]"
               >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open in Mail Client</span>
+                <ExternalLink className="w-3.5 h-3.5 text-[#8C847C]" />
+                <span>Mail Client</span>
               </a>
               <button
                 onClick={() => handleCopyText(`Subject: ${emailSubject}\n\n${emailBody}`)}
@@ -478,6 +547,21 @@ export const MessageSimulator: React.FC<MessageSimulatorProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Live Dispatch Notification Alert */}
+          {sendResultStatus === 'success' && (
+            <div className="bg-emerald-50 border-b border-emerald-200 px-6 py-2 text-emerald-800 text-xs flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{sendResultMessage}</span>
+            </div>
+          )}
+
+          {sendResultStatus === 'error' && (
+            <div className="bg-red-50 border-b border-red-200 px-6 py-2 text-red-700 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
+              <span>{sendResultMessage}</span>
+            </div>
+          )}
 
           {/* Email Body & Details */}
           <div className="p-6 space-y-5">

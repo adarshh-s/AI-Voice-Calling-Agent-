@@ -219,20 +219,32 @@ export const BatchCampaignRunner: React.FC<BatchCampaignRunnerProps> = ({
 
           // Trigger email relay (handles both Vercel client-direct and backend server)
           let emDeliveryStatus = 'delivered';
+          let emErrorDetail = '';
           try {
+            const resolvedSenderEmail = channelSettings.resendFromEmail || 
+              (channelSettings.emailProvider === 'resend' && (!campaignSettings.senderEmail || campaignSettings.senderEmail.includes('.example'))
+                ? 'onboarding@resend.dev'
+                : campaignSettings.senderEmail || 'onboarding@resend.dev');
+
             const emRes = await sendEmailDirectOrBackend({
               lead,
               subject: personalized.emailSubject,
               body: personalized.emailBody,
               channelSettings,
               senderName: campaignSettings.senderName,
-              senderEmail: campaignSettings.senderEmail,
+              senderEmail: resolvedSenderEmail,
             });
             if (!emRes.delivered) {
               emDeliveryStatus = 'failed';
+              emErrorDetail = emRes.errorDetail || 'Provider dispatch failed';
+              updatedLead.emailStatus = 'Failed';
+            } else {
+              updatedLead.emailStatus = 'Sent';
             }
-          } catch {
+          } catch (err: any) {
             emDeliveryStatus = 'failed';
+            emErrorDetail = err?.message || 'Network error';
+            updatedLead.emailStatus = 'Failed';
           }
 
           newLogs.push({
@@ -246,6 +258,7 @@ export const BatchCampaignRunner: React.FC<BatchCampaignRunnerProps> = ({
             subject: personalized.emailSubject,
             preview: personalized.emailBody.substring(0, 80) + '...',
             directUrl: mailLink,
+            errorDetail: emErrorDetail,
           });
         } else {
           updatedLead.emailStatus = 'Failed';
@@ -556,6 +569,26 @@ export const BatchCampaignRunner: React.FC<BatchCampaignRunnerProps> = ({
           )}
         </div>
 
+        {/* Resend Testing & Inbox Delivery Guidance Banner */}
+        {channelSettings.emailProvider === 'resend' && (
+          <div className="mt-3 p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl text-xs text-amber-900 flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-semibold text-amber-950">
+                📬 Why emails might not appear in Primary Inbox immediately:
+              </p>
+              <ul className="list-disc list-inside space-y-0.5 text-[11px] text-amber-900">
+                <li>
+                  <strong>Check Gmail Spam & Promotions:</strong> Emails sent using the default free sandbox sender (<code className="bg-amber-100 px-1 rounded font-mono text-[10px]">onboarding@resend.dev</code>) often land in your <strong>Spam / Junk</strong> folder or <strong>Promotions</strong> tab.
+                </li>
+                <li>
+                  <strong>Resend Free Sandbox Limitation:</strong> Without a custom verified domain on Resend.com, Resend <span className="underline">only allows delivering emails to the registered Resend account address</span> (<code className="bg-amber-100 px-1 rounded font-mono text-[10px]">adarshs8400@gmail.com</code>). Attempts to send to other fake/prospect addresses are blocked by Resend until your domain DNS is verified.
+                </li>
+              </ul>
+            </div>
+          </div>
+        )}
+
         {/* Campaign Finished Notification Banner */}
         {!isRunning && pendingLeads.length === 0 && totalLeadsCount > 0 && (
           <div className="mt-4 p-4 rounded-xl bg-gradient-to-r from-[#E8F5E9] to-[#E0F2FE] border border-[#A5D6A7] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
@@ -807,11 +840,23 @@ export const BatchCampaignRunner: React.FC<BatchCampaignRunnerProps> = ({
                     </div>
 
                     <div className="text-right shrink-0">
-                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#2E7D32] bg-[#E8F5E9] px-2 py-0.5 rounded-full">
-                        <CheckCircle2 className="w-2.5 h-2.5" />
-                        {log.channel === 'whatsapp' ? 'Delivered' : 'Sent'}
-                      </span>
+                      {log.status === 'delivered' ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#2E7D32] bg-[#E8F5E9] px-2 py-0.5 rounded-full">
+                          <CheckCircle2 className="w-2.5 h-2.5" />
+                          Delivered
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full" title={log.errorDetail || 'Dispatch failed'}>
+                          <AlertCircle className="w-2.5 h-2.5 text-amber-600" />
+                          Failed
+                        </span>
+                      )}
                       <div className="text-[10px] text-[#A69F96] mt-0.5">{log.timestamp}</div>
+                      {log.errorDetail && log.status === 'failed' && (
+                        <div className="text-[9px] text-amber-700 mt-0.5 max-w-[150px] truncate" title={log.errorDetail}>
+                          {log.errorDetail}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))

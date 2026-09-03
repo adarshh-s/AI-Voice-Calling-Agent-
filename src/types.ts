@@ -135,6 +135,7 @@ export interface OutreachDispatchLog {
   subject?: string;
   preview: string;
   directUrl?: string;
+  errorDetail?: string;
 }
 
 export interface ChatMessage {

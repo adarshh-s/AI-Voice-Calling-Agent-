@@ -303,6 +303,7 @@ export default function App() {
             onSelectLead={setSelectedLeadId}
             availableSlots={calendarSlots}
             campaignSettings={campaignSettings}
+            channelSettings={channelSettings}
             templates={templates}
             onUpdateLead={handleUpdateLead}
             onBookCalendarSlot={handleBookCalendarSlot}

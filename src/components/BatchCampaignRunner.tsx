@@ -2,865 +2,827 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Play,
   Pause,
-  Square,
-  SkipForward,
-  Phone,
-  PhoneCall,
-  Volume2,
-  Mic,
-  Calendar,
+  RotateCcw,
+  Send,
+  MessageSquare,
+  Mail,
   CheckCircle2,
-  AlertCircle,
   Clock,
+  ExternalLink,
   Sparkles,
-  Bot,
-  User,
-  Zap,
-  Globe,
   Settings,
-  FileSpreadsheet,
   Layers,
-  ArrowRight,
+  ChevronRight,
+  AlertCircle,
+  FileSpreadsheet,
+  Upload,
+  Zap,
 } from 'lucide-react';
 import {
   Lead,
   CalendarSlot,
-  AgentSettings,
-  TelephonySettings,
-  TranscriptMessage,
-  CallStage,
+  CampaignSettings,
+  MessageTemplate,
+  ChannelApiSettings,
+  OutreachDispatchLog,
 } from '../types';
-import { executeCallTurn } from '../utils/aiCallEngine';
+import {
+  generateAIPersonalizedMessage,
+  generateWhatsAppLink,
+  generateMailtoLink,
+} from '../utils/outreachEngine';
+import { DEFAULT_TEMPLATES } from '../data/sampleTemplates';
 
 interface BatchCampaignRunnerProps {
   leads: Lead[];
   availableSlots: CalendarSlot[];
-  agentSettings: AgentSettings;
-  telephonySettings: TelephonySettings;
+  campaignSettings: CampaignSettings;
+  channelSettings: ChannelApiSettings;
+  templates: MessageTemplate[];
   onUpdateLead: (lead: Lead) => void;
-  onBookCalendarSlot: (slotId: string, lead: Lead, notes: string) => void;
-  onOpenTelephonyConfig: () => void;
+  onResetAllLeadsToPending?: () => void;
+  onBookCalendarSlot?: (slotId: string, lead: Lead, notes: string) => void;
+  onOpenChannelConfig: () => void;
   onOpenExcelUpload: () => void;
+  onSelectLeadForSimulator?: (leadId: string) => void;
 }
 
 export const BatchCampaignRunner: React.FC<BatchCampaignRunnerProps> = ({
   leads,
   availableSlots,
-  agentSettings,
-  telephonySettings,
+  campaignSettings,
+  channelSettings,
+  templates,
   onUpdateLead,
-  onBookCalendarSlot,
-  onOpenTelephonyConfig,
+  onResetAllLeadsToPending,
+  onOpenChannelConfig,
   onOpenExcelUpload,
+  onSelectLeadForSimulator,
 }) => {
-  // Campaign Execution State
-  const [isCampaignRunning, setIsCampaignRunning] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [delaySeconds, setDelaySeconds] = useState(3);
-  const [countdown, setCountdown] = useState<number | null>(null);
+  const [channelMode, setChannelMode] = useState<'omnichannel' | 'whatsapp' | 'email'>(
+    campaignSettings.channelMode || 'omnichannel'
+  );
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(
+    templates[0]?.id || 'tpl-1'
+  );
+  const [delaySeconds, setDelaySeconds] = useState<number>(campaignSettings.delayBetweenMessagesSeconds || 2);
+  const [autoOpenApps, setAutoOpenApps] = useState<boolean>(false);
+  
+  // Real-time live dispatch previews
+  const [currentLead, setCurrentLead] = useState<Lead | null>(null);
+  const [currentWhatsAppText, setCurrentWhatsAppText] = useState<string>('');
+  const [currentEmailSubject, setCurrentEmailSubject] = useState<string>('');
+  const [currentEmailBody, setCurrentEmailBody] = useState<string>('');
+  const [isProcessingStep, setIsProcessingStep] = useState<boolean>(false);
+  const [dispatchLogs, setDispatchLogs] = useState<OutreachDispatchLog[]>([]);
 
-  // Active Call State
-  const [activeCallStage, setActiveCallStage] = useState<CallStage>('idle');
-  const [callDuration, setCallDuration] = useState(0);
-  const [transcript, setTranscript] = useState<TranscriptMessage[]>([]);
-  const [statusLog, setStatusLog] = useState('Campaign idle. Press "Start Automated Calling" to begin.');
-  const [lastAction, setLastAction] = useState<string | null>(null);
-  const [isMuted, setIsMuted] = useState(false);
-
-  // Audio & Speech Synthesis Refs
-  const synthRef = useRef<SpeechSynthesis | null>(null);
-  const timerRef = useRef<number | null>(null);
-  const countdownTimerRef = useRef<number | null>(null);
-  const transcriptEndRef = useRef<HTMLDivElement>(null);
-  const isCampaignRunningRef = useRef(isCampaignRunning);
+  const isRunningRef = useRef(isRunning);
+  isRunningRef.current = isRunning;
   const isPausedRef = useRef(isPaused);
-  const currentIndexRef = useRef(currentIndex);
+  isPausedRef.current = isPaused;
 
-  // Keep refs in sync with state for async timers
+  const validLeads = leads.filter((l) => l.isValidPhone || l.isValidEmail);
+  const pendingLeads = leads.filter(
+    (l) => l.status === 'Pending' || (channelMode === 'whatsapp' && l.whatsAppStatus === 'Pending') || (channelMode === 'email' && l.emailStatus === 'Pending')
+  );
+
+  const completedWhatsAppCount = leads.filter((l) => l.whatsAppStatus !== 'Pending').length;
+  const completedEmailCount = leads.filter((l) => l.emailStatus !== 'Pending').length;
+  const bookedCount = leads.filter((l) => l.status === 'Meeting Scheduled').length;
+  const totalLeadsCount = leads.length;
+
+  const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) || templates[0];
+
+  // Campaign Execution Loop
   useEffect(() => {
-    isCampaignRunningRef.current = isCampaignRunning;
-    isPausedRef.current = isPaused;
-    currentIndexRef.current = currentIndex;
-  }, [isCampaignRunning, isPaused, currentIndex]);
+    let timeoutId: NodeJS.Timeout;
 
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      synthRef.current = window.speechSynthesis;
-    }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
-      if (synthRef.current) synthRef.current.cancel();
-    };
-  }, []);
+    const processNextLead = async () => {
+      if (!isRunningRef.current || isPausedRef.current) return;
 
-  useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [transcript]);
+      // Find next pending lead
+      const nextPendingIndex = leads.findIndex(
+        (l, idx) =>
+          idx >= currentIndex &&
+          (l.status === 'Pending' ||
+            (channelMode === 'whatsapp' && l.whatsAppStatus === 'Pending') ||
+            (channelMode === 'email' && l.emailStatus === 'Pending') ||
+            (channelMode === 'omnichannel' && (l.whatsAppStatus === 'Pending' || l.emailStatus === 'Pending')))
+      );
 
-  // Call duration timer
-  useEffect(() => {
-    if (activeCallStage === 'connected' || activeCallStage === 'speaking' || activeCallStage === 'listening' || activeCallStage === 'processing') {
-      timerRef.current = window.setInterval(() => {
-        setCallDuration((prev) => prev + 1);
-      }, 1000);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [activeCallStage]);
+      if (nextPendingIndex === -1) {
+        setIsRunning(false);
+        setIsProcessingStep(false);
+        setCurrentLead(null);
+        return;
+      }
 
-  const validLeads = leads.filter((l) => l.isValidPhone);
-  const pendingLeads = leads.filter((l) => l.status === 'Pending');
-  const completedLeads = leads.filter((l) => l.status !== 'Pending' && l.status !== 'In Progress');
-  const scheduledCount = leads.filter((l) => l.status === 'Meeting Scheduled').length;
-  const currentLead = leads[currentIndex] || leads[0];
+      const lead = leads[nextPendingIndex];
+      setCurrentIndex(nextPendingIndex);
+      setCurrentLead(lead);
+      setIsProcessingStep(true);
 
-  const progressPercent = leads.length > 0 ? Math.round((completedLeads.length / leads.length) * 100) : 0;
+      // 1. Generate AI personalized message
+      const personalized = await generateAIPersonalizedMessage(
+        lead,
+        campaignSettings,
+        selectedTemplate,
+        availableSlots
+      );
 
-  // Speak synthesized voice
-  const speakText = (text: string, onEnd?: () => void) => {
-    if (!synthRef.current || isMuted) {
-      if (onEnd) onEnd();
-      return;
-    }
+      setCurrentWhatsAppText(personalized.whatsApp);
+      setCurrentEmailSubject(personalized.emailSubject);
+      setCurrentEmailBody(personalized.emailBody);
 
-    synthRef.current.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = agentSettings.speechRate || 1.0;
-    utterance.pitch = agentSettings.pitch || 1.0;
-
-    const voices = synthRef.current.getVoices();
-    const preferredVoice = voices.find(
-      (v) =>
-        (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Samantha') || v.name.includes('English')) &&
-        v.lang.startsWith('en')
-    );
-    if (preferredVoice) {
-      utterance.voice = preferredVoice;
-    }
-
-    utterance.onstart = () => {
-      setActiveCallStage('speaking');
-    };
-
-    utterance.onend = () => {
-      setActiveCallStage('listening');
-      if (onEnd) onEnd();
-    };
-
-    utterance.onerror = () => {
-      setActiveCallStage('listening');
-      if (onEnd) onEnd();
-    };
-
-    synthRef.current.speak(utterance);
-  };
-
-  // Start Automated Batch Calling
-  const startCampaign = () => {
-    if (leads.length === 0) {
-      setStatusLog('No leads in spreadsheet to call. Please upload an Excel/CSV file.');
-      return;
-    }
-
-    // Find first pending index
-    const firstPendingIdx = leads.findIndex((l) => l.status === 'Pending');
-    const startIdx = firstPendingIdx >= 0 ? firstPendingIdx : 0;
-
-    setIsCampaignRunning(true);
-    setIsPaused(false);
-    setCurrentIndex(startIdx);
-    executeCallForLead(startIdx);
-  };
-
-  const pauseCampaign = () => {
-    setIsPaused(true);
-    setStatusLog('Campaign paused by user.');
-    if (synthRef.current) synthRef.current.cancel();
-  };
-
-  const resumeCampaign = () => {
-    setIsPaused(false);
-    setStatusLog(`Resuming campaign on lead #${currentIndex + 1}...`);
-    executeCallForLead(currentIndex);
-  };
-
-  const stopCampaign = () => {
-    setIsCampaignRunning(false);
-    setIsPaused(false);
-    setActiveCallStage('idle');
-    setCountdown(null);
-    if (synthRef.current) synthRef.current.cancel();
-    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
-    setStatusLog('Campaign stopped.');
-  };
-
-  // Execute full automated call cycle for a single lead
-  const executeCallForLead = async (index: number) => {
-    if (index >= leads.length) {
-      setIsCampaignRunning(false);
-      setActiveCallStage('completed');
-      setStatusLog('🎉 Batch campaign completed! All leads dialed and updated.');
-      return;
-    }
-
-    const lead = leads[index];
-
-    if (!lead) return;
-
-    // If invalid number, mark and advance immediately
-    if (!lead.isValidPhone) {
-      onUpdateLead({
-        ...lead,
-        status: 'Invalid Number',
-        callResult: 'Invalid phone format (skipped)',
-        lastCalled: new Date().toISOString().replace('T', ' ').slice(0, 16),
+      // 2. Dispatch according to channel mode
+      const nowFormatted = new Date().toLocaleString([], {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
       });
-      advanceToNextLead(index + 1);
-      return;
-    }
 
-    // If already completed and not pending, advance
-    if (lead.status === 'Meeting Scheduled' || lead.status === 'Do Not Contact') {
-      advanceToNextLead(index + 1);
-      return;
-    }
-
-    // Mark In Progress
-    onUpdateLead({
-      ...lead,
-      status: 'In Progress',
-    });
-
-    setActiveCallStage('dialing');
-    setCallDuration(0);
-    setTranscript([]);
-    setLastAction(null);
-    setStatusLog(`📞 Dialing ${lead.name} at ${lead.phone} (${lead.company})...`);
-
-    // Dispatch via external telephony webhook if configured
-    if (telephonySettings.provider === 'vapi' && telephonySettings.vapiApiKey) {
-      try {
-        await fetch('https://api.vapi.ai/call/phone', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${telephonySettings.vapiApiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            phoneNumberId: telephonySettings.vapiPhoneNumberId,
-            assistantId: telephonySettings.vapiAssistantId,
-            customer: {
-              number: lead.phone,
-              name: lead.name,
-            },
-          }),
-        });
-      } catch (e) {
-        console.warn('Vapi API call error (fallback to browser engine):', e);
-      }
-    } else if (telephonySettings.provider === 'webhook' && telephonySettings.n8nWebhookUrl) {
-      try {
-        await fetch(telephonySettings.n8nWebhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            lead,
-            timestamp: new Date().toISOString(),
-          }),
-        });
-      } catch (e) {
-        console.warn('n8n webhook dispatch error:', e);
-      }
-    }
-
-    // Simulate connection & run automated conversation turns
-    setTimeout(async () => {
-      if (!isCampaignRunningRef.current || isPausedRef.current) return;
-
-      setActiveCallStage('connected');
-      setStatusLog(`Connected with ${lead.name}. Starting conversational script.`);
-
-      // Turn 1: AI Greeting
-      try {
-        const turn1Data = await executeCallTurn([], lead, agentSettings, availableSlots);
-        const greeting = turn1Data.reply || `Hi, may I speak with ${lead.name}?`;
-
-        const msg1: TranscriptMessage = {
-          id: `msg-${Date.now()}-1`,
-          role: 'agent',
-          content: greeting,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        };
-
-        setTranscript([msg1]);
-
-        speakText(greeting, () => {
-          // Simulate customer answering yes & scheduling
-          simulateCustomerResponse(lead, [msg1], index);
-        });
-      } catch (err) {
-        console.error('Call turn error:', err);
-        handleCallCompletion(lead, index, {
-          status: 'Contacted',
-          callResult: 'Call Completed',
-          notes: 'Automated call executed',
-          meetingScheduled: false,
-        });
-      }
-    }, 1800);
-  };
-
-  // Simulate dynamic customer interaction & booking in batch mode
-  const simulateCustomerResponse = async (
-    lead: Lead,
-    currentHistory: TranscriptMessage[],
-    index: number
-  ) => {
-    if (!isCampaignRunningRef.current || isPausedRef.current) return;
-
-    // Customer Turn 1
-    setTimeout(async () => {
-      const userReplyText = `Yes, this is ${lead.name.split(' ')[0]}. What is this regarding?`;
-      const userMsg: TranscriptMessage = {
-        id: `msg-${Date.now()}-user-1`,
-        role: 'user',
-        content: userReplyText,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      let updatedLead: Lead = {
+        ...lead,
+        status: 'Contacted',
+        lastContacted: nowFormatted,
+        channelUsed: channelMode,
+        whatsAppMessage: personalized.whatsApp,
+        emailSubject: personalized.emailSubject,
+        emailBody: personalized.emailBody,
       };
 
-      const updatedHistory1 = [...currentHistory, userMsg];
-      setTranscript(updatedHistory1);
-      setActiveCallStage('processing');
+      const newLogs: OutreachDispatchLog[] = [];
 
-      // AI Turn 2: Value proposition & ask for demo
-      try {
-        const turn2Data = await executeCallTurn(updatedHistory1, lead, agentSettings, availableSlots);
-        const aiPitch =
-          turn2Data.reply ||
-          `Hi ${lead.name}, I'm ${agentSettings.agentName} from ${agentSettings.companyName}. We help teams automate lead calling directly from spreadsheets. Do you have 10 minutes for a quick demo this week?`;
+      // WhatsApp dispatch
+      if (channelMode === 'omnichannel' || channelMode === 'whatsapp') {
+        if (lead.isValidPhone && lead.phone) {
+          const waLink = generateWhatsAppLink(lead.phone, personalized.whatsApp);
+          updatedLead.whatsAppStatus = 'Delivered';
 
-        const agentMsg2: TranscriptMessage = {
-          id: `msg-${Date.now()}-agent-2`,
-          role: 'agent',
-          content: aiPitch,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        };
+          if (autoOpenApps && typeof window !== 'undefined') {
+            window.open(waLink, '_blank');
+          }
 
-        const updatedHistory2 = [...updatedHistory1, agentMsg2];
-        setTranscript(updatedHistory2);
-
-        speakText(aiPitch, () => {
-          // Customer Turn 2: Agrees to demo
-          setTimeout(async () => {
-            if (!isCampaignRunningRef.current || isPausedRef.current) return;
-
-            const userAgreeText = `Sure, that sounds useful. How does Thursday at 11 AM work?`;
-            const userMsg2: TranscriptMessage = {
-              id: `msg-${Date.now()}-user-2`,
-              role: 'user',
-              content: userAgreeText,
-              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-            };
-
-            const updatedHistory3 = [...updatedHistory2, userMsg2];
-            setTranscript(updatedHistory3);
-            setActiveCallStage('processing');
-
-            // AI Turn 3: Calendar booking confirmation
-            const slot = availableSlots.find((s) => s.available) || availableSlots[0];
-            const meetingDate = '2026-09-04';
-            const meetingTime = '11:00 AM';
-
-            if (slot) {
-              onBookCalendarSlot(slot.id, lead, 'Scheduled via AI Outbound Batch Dialer');
-            }
-
-            const aiConfirm = `Excellent! I have booked Thursday at 11:00 AM on our calendar and sent the Google Meet link to ${lead.email || 'your email'}. Have a great day!`;
-
-            const agentMsg3: TranscriptMessage = {
-              id: `msg-${Date.now()}-agent-3`,
-              role: 'agent',
-              content: aiConfirm,
-              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-              actionTaken: `Booked Google Meet for ${meetingDate} at ${meetingTime}`,
-            };
-
-            setLastAction(`Meeting Confirmed: ${meetingDate} at ${meetingTime}`);
-            setTranscript([...updatedHistory3, agentMsg3]);
-
-            speakText(aiConfirm, () => {
-              // Wrap up call
-              setTimeout(() => {
-                handleCallCompletion(lead, index, {
-                  status: 'Meeting Scheduled',
-                  callResult: 'Meeting Booked',
-                  notes: `AI scheduled 30-min demo for ${meetingDate} at ${meetingTime}. Google Meet invite sent.`,
-                  meetingScheduled: true,
-                  meetingDate,
-                  meetingTime,
-                });
-              }, 1500);
+          // Trigger backend relay
+          let waDeliveryStatus = 'delivered';
+          try {
+            const waRes = await fetch('/api/outreach/send-whatsapp', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                lead,
+                messageText: personalized.whatsApp,
+                channelSettings,
+                webhookUrl: channelSettings.n8nWebhookUrl,
+              }),
             });
-          }, 1200);
-        });
-      } catch (err) {
-        console.error('Pitch turn error:', err);
-        handleCallCompletion(lead, index, {
-          status: 'Meeting Scheduled',
-          callResult: 'Meeting Booked',
-          notes: 'Automated demo booked',
-          meetingScheduled: true,
-          meetingDate: '2026-09-04',
-          meetingTime: '11:00 AM',
-        });
-      }
-    }, 1200);
-  };
+            const waData = await waRes.json();
+            if (!waData.delivered) {
+              waDeliveryStatus = 'failed';
+            }
+          } catch {}
 
-  // Complete current call & trigger post-call Google Sheet sync
-  const handleCallCompletion = (
-    lead: Lead,
-    index: number,
-    result: {
-      status: any;
-      callResult: string;
-      notes: string;
-      meetingScheduled: boolean;
-      meetingDate?: string;
-      meetingTime?: string;
-    }
-  ) => {
-    setActiveCallStage('completed');
-    setStatusLog(`✓ Call completed for ${lead.name}. Synchronizing results to spreadsheet...`);
-
-    // Update Lead in Parent State & LocalStorage
-    onUpdateLead({
-      ...lead,
-      status: result.status,
-      callResult: result.callResult,
-      meetingDate: result.meetingDate || lead.meetingDate || '',
-      meetingTime: result.meetingTime || lead.meetingTime || '',
-      notes: result.notes || lead.notes,
-      lastCalled: new Date().toISOString().replace('T', ' ').slice(0, 16),
-      durationSeconds: callDuration || 45,
-    });
-
-    advanceToNextLead(index + 1);
-  };
-
-  // Schedule auto-dialing of the next lead in queue
-  const advanceToNextLead = (nextIndex: number) => {
-    if (!isCampaignRunningRef.current) return;
-
-    if (nextIndex >= leads.length) {
-      setIsCampaignRunning(false);
-      setActiveCallStage('completed');
-      setStatusLog('🎉 Batch campaign completed! All spreadsheet rows processed.');
-      return;
-    }
-
-    setCurrentIndex(nextIndex);
-    setCountdown(delaySeconds);
-
-    let remaining = delaySeconds;
-    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
-
-    countdownTimerRef.current = window.setInterval(() => {
-      remaining -= 1;
-      setCountdown(remaining);
-      if (remaining <= 0) {
-        if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
-        setCountdown(null);
-        if (isCampaignRunningRef.current && !isPausedRef.current) {
-          executeCallForLead(nextIndex);
+          newLogs.push({
+            id: `log-wa-${Date.now()}`,
+            leadId: lead.id,
+            leadName: lead.name,
+            recipient: lead.phone,
+            channel: 'whatsapp',
+            status: waDeliveryStatus as 'delivered' | 'failed',
+            timestamp: nowFormatted,
+            preview: personalized.whatsApp.substring(0, 80) + '...',
+            directUrl: waLink,
+          });
+        } else {
+          updatedLead.whatsAppStatus = 'Failed';
         }
       }
-    }, 1000);
+
+      // Email dispatch
+      if (channelMode === 'omnichannel' || channelMode === 'email') {
+        if (lead.isValidEmail && lead.email) {
+          const mailLink = generateMailtoLink(
+            lead.email,
+            personalized.emailSubject,
+            personalized.emailBody
+          );
+          updatedLead.emailStatus = 'Sent';
+
+          if (autoOpenApps && channelMode === 'email' && typeof window !== 'undefined') {
+            window.open(mailLink, '_blank');
+          }
+
+          // Trigger backend relay
+          let emDeliveryStatus = 'delivered';
+          try {
+            const emRes = await fetch('/api/outreach/send-email', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                lead,
+                subject: personalized.emailSubject,
+                body: personalized.emailBody,
+                channelSettings,
+                senderName: campaignSettings.senderName,
+                senderEmail: campaignSettings.senderEmail,
+                webhookUrl: channelSettings.n8nWebhookUrl,
+              }),
+            });
+            const emData = await emRes.json();
+            if (!emData.delivered) {
+              emDeliveryStatus = 'failed';
+            }
+          } catch {}
+
+          newLogs.push({
+            id: `log-em-${Date.now()}`,
+            leadId: lead.id,
+            leadName: lead.name,
+            recipient: lead.email,
+            channel: 'email',
+            status: emDeliveryStatus as 'delivered' | 'failed',
+            timestamp: nowFormatted,
+            subject: personalized.emailSubject,
+            preview: personalized.emailBody.substring(0, 80) + '...',
+            directUrl: mailLink,
+          });
+        } else {
+          updatedLead.emailStatus = 'Failed';
+        }
+      }
+
+      onUpdateLead(updatedLead);
+      if (newLogs.length > 0) {
+        setDispatchLogs((prev) => [...newLogs, ...prev].slice(0, 50));
+      }
+
+      setIsProcessingStep(false);
+
+      // Wait for delay before next item
+      if (isRunningRef.current && !isPausedRef.current) {
+        timeoutId = setTimeout(() => {
+          setCurrentIndex((prev) => prev + 1);
+        }, delaySeconds * 1000);
+      }
+    };
+
+    if (isRunning && !isPaused) {
+      processNextLead();
+    }
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [isRunning, isPaused, currentIndex]);
+
+  const handleStart = () => {
+    setIsRunning(true);
+    setIsPaused(false);
   };
 
-  const formatSeconds = (sec: number) => {
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  const handlePause = () => {
+    setIsPaused(true);
   };
+
+  const handleResume = () => {
+    setIsPaused(false);
+  };
+
+  const handleReset = () => {
+    setIsRunning(false);
+    setIsPaused(false);
+    setCurrentIndex(0);
+    setCurrentLead(null);
+    setIsProcessingStep(false);
+  };
+
+  const handleRestartAll = () => {
+    setIsRunning(false);
+    setIsPaused(false);
+    setCurrentIndex(0);
+    setCurrentLead(null);
+    setIsProcessingStep(false);
+    if (onResetAllLeadsToPending) {
+      onResetAllLeadsToPending();
+    }
+    setTimeout(() => {
+      setIsRunning(true);
+    }, 150);
+  };
+
+  const progressPercent = totalLeadsCount > 0
+    ? Math.round(((totalLeadsCount - pendingLeads.length) / totalLeadsCount) * 100)
+    : 0;
 
   return (
     <div className="space-y-6">
-      {/* Campaign Control HUD */}
-      <div className="bg-white border border-[#E8E4DF] rounded-[28px] p-6 shadow-sm space-y-5">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      {/* Top Banner / Configuration Card */}
+      <div className="bg-white rounded-2xl border border-[#E8E4DF] p-5 sm:p-6 shadow-xs">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-6 border-b border-[#F0ECE6]">
           <div>
-            <div className="flex items-center space-x-2 text-xs font-semibold uppercase tracking-wider text-[#8C847C] mb-1">
-              <Zap className="w-3.5 h-3.5 text-[#8BA888]" />
-              <span>Automated Batch Auto-Dialer Engine</span>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-bold text-[#2D2926] tracking-tight">
+                Automated WhatsApp & Email Campaign Engine
+              </h1>
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#25D366]/15 text-[#128C7E]">
+                <Zap className="w-3 h-3 fill-[#25D366]" />
+                Gemini 3.7 Flash AI Copywriter
+              </span>
             </div>
-            <h2 className="text-xl font-bold text-[#2D2926]">
-              Outbound Client Calling Campaign
-            </h2>
-            <p className="text-xs sm:text-sm text-[#5C5651] mt-0.5">
-              Automatically iterates through spreadsheet phone numbers, converses via AI, and books meetings into Google Calendar.
+            <p className="text-xs text-[#7A7269] mt-1">
+              Ingest contacts from Excel spreadsheets and automatically dispatch personalized WhatsApp messages & emails with Google Calendar booking links.
             </p>
           </div>
 
-          {/* Campaign Action Buttons */}
-          <div className="flex flex-wrap items-center gap-2.5">
-            {!isCampaignRunning ? (
-              <button
-                id="btn-start-batch-campaign"
-                onClick={startCampaign}
-                className="flex items-center space-x-2 px-6 py-3 rounded-full bg-[#8BA888] hover:bg-[#799676] text-white font-bold text-sm shadow-md transition-all hover:scale-[1.02] active:scale-[0.98]"
-              >
-                <Play className="w-4 h-4 fill-current" />
-                <span>Start Automated Calling ({pendingLeads.length} Pending)</span>
-              </button>
-            ) : isPaused ? (
-              <button
-                onClick={resumeCampaign}
-                className="flex items-center space-x-2 px-6 py-3 rounded-full bg-[#8BA888] hover:bg-[#799676] text-white font-bold text-sm shadow-md transition-all"
-              >
-                <Play className="w-4 h-4 fill-current" />
-                <span>Resume Campaign</span>
-              </button>
-            ) : (
-              <button
-                onClick={pauseCampaign}
-                className="flex items-center space-x-2 px-5 py-2.5 rounded-full bg-amber-500 hover:bg-amber-600 text-white font-semibold text-xs shadow-sm transition-all"
-              >
-                <Pause className="w-4 h-4 fill-current" />
-                <span>Pause</span>
-              </button>
-            )}
-
-            {isCampaignRunning && (
-              <>
-                <button
-                  onClick={() => advanceToNextLead(currentIndex + 1)}
-                  className="flex items-center space-x-1.5 px-4 py-2.5 rounded-full bg-[#FAF9F6] hover:bg-[#F0EDE9] border border-[#E8E4DF] text-[#4A443F] font-semibold text-xs transition-all"
-                  title="Skip to next lead immediately"
-                >
-                  <SkipForward className="w-4 h-4" />
-                  <span>Skip to Next</span>
-                </button>
-
-                <button
-                  onClick={stopCampaign}
-                  className="flex items-center space-x-1.5 px-4 py-2.5 rounded-full bg-[#C85A5A] hover:bg-[#B84A4A] text-white font-semibold text-xs transition-all"
-                >
-                  <Square className="w-3.5 h-3.5 fill-current" />
-                  <span>Stop</span>
-                </button>
-              </>
-            )}
-
+          {/* Quick Actions */}
+          <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={onOpenExcelUpload}
-              className="flex items-center space-x-1.5 px-4 py-2.5 rounded-full bg-[#FAF9F6] hover:bg-[#F0EDE9] border border-[#E8E4DF] text-[#4A443F] font-semibold text-xs transition-all"
+              id="campaign-restart-automation-top-btn"
+              onClick={handleRestartAll}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-[#E8F5E9] hover:bg-[#C8E6C9] border border-[#A5D6A7] text-[#1B5E20] transition-colors"
+              title="Reset all lead statuses and start sequence from beginning"
             >
-              <FileSpreadsheet className="w-4 h-4 text-[#8BA888]" />
-              <span>Feed Excel File</span>
+              <RotateCcw className="w-3.5 h-3.5 text-[#2E7D32]" />
+              <span>Start Automation Again</span>
+            </button>
+            <button
+              id="campaign-upload-excel-btn"
+              onClick={onOpenExcelUpload}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-[#FAF8F5] hover:bg-[#F2EFE9] border border-[#DDD6CB] text-[#4A443F] transition-colors"
+            >
+              <Upload className="w-3.5 h-3.5 text-[#8C847C]" />
+              <span>Import Sheet</span>
+            </button>
+            <button
+              id="campaign-config-channels-btn"
+              onClick={onOpenChannelConfig}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-[#FAF8F5] hover:bg-[#F2EFE9] border border-[#DDD6CB] text-[#4A443F] transition-colors"
+            >
+              <Settings className="w-3.5 h-3.5 text-[#8C847C]" />
+              <span>API Settings</span>
             </button>
           </div>
         </div>
 
-        {/* Campaign Metrics & Progress Bar */}
-        <div className="space-y-3 pt-2">
-          <div className="flex items-center justify-between text-xs font-semibold text-[#5C5651]">
-            <div className="flex items-center space-x-4">
-              <span>
-                Progress: <strong className="text-[#2D2926]">{completedLeads.length}</strong> of{' '}
-                <strong className="text-[#2D2926]">{leads.length}</strong> calls processed ({progressPercent}%)
-              </span>
-              <span className="hidden sm:inline text-[#8C847C]">•</span>
-              <span className="hidden sm:inline text-[#537050]">
-                🎯 <strong className="font-bold">{scheduledCount}</strong> Meetings Scheduled
-              </span>
-            </div>
-
-            {countdown !== null && (
-              <span className="px-3 py-1 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold animate-pulse">
-                Next call starting in {countdown}s...
-              </span>
-            )}
-          </div>
-
-          <div className="w-full bg-[#FAF9F6] h-3 rounded-full overflow-hidden border border-[#E8E4DF]">
-            <div
-              className="h-full bg-[#8BA888] rounded-full transition-all duration-500 ease-out"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
-        </div>
-
-        {/* Telephony Dispatch Provider Pill */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 text-xs border-t border-[#E8E4DF]">
-          <div className="flex items-center space-x-2 text-[#8C847C]">
-            <span>Active Telephony Engine:</span>
-            <span className="px-2.5 py-0.5 rounded-full bg-[#8BA888]/15 border border-[#8BA888]/30 text-[#537050] font-bold uppercase tracking-wider text-[10px]">
-              {telephonySettings.provider === 'browser'
-                ? 'Free Browser Voice AI Engine'
-                : telephonySettings.provider.toUpperCase()}
-            </span>
-          </div>
-
-          <button
-            onClick={onOpenTelephonyConfig}
-            className="text-xs text-[#537050] hover:text-[#435e41] font-semibold flex items-center gap-1 underline"
-          >
-            <Settings className="w-3.5 h-3.5" />
-            <span>Configure Telephony (Vapi, Retell, Twilio, Webhook)</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Main Active Dialing View Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Active Call Live Monitor */}
-        <div className="lg:col-span-7 space-y-4">
-          <div className="bg-white border border-[#E8E4DF] rounded-[28px] p-6 shadow-sm flex flex-col h-[560px]">
-            {/* Active Header */}
-            <div className="flex items-center justify-between pb-4 border-b border-[#E8E4DF]">
-              <div className="flex items-center space-x-3">
-                <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center text-white ${
-                    activeCallStage === 'speaking' || activeCallStage === 'listening'
-                      ? 'bg-[#8BA888] ring-4 ring-[#8BA888]/20 animate-pulse'
-                      : activeCallStage === 'dialing'
-                      ? 'bg-amber-500 animate-bounce'
-                      : 'bg-[#F0EDE9] text-[#8C847C]'
-                  }`}
-                >
-                  <Phone className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-sm text-[#2D2926] flex items-center gap-2">
-                    <span>{currentLead?.name}</span>
-                    <span className="text-xs font-normal text-[#8C847C]">({currentLead?.company})</span>
-                  </h3>
-                  <p className="text-xs font-mono text-[#537050] font-medium">
-                    {currentLead?.phone}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <span
-                  className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
-                    activeCallStage === 'speaking' || activeCallStage === 'listening'
-                      ? 'bg-[#8BA888]/15 text-[#537050] border border-[#8BA888]/30'
-                      : activeCallStage === 'dialing'
-                      ? 'bg-amber-50 text-amber-800 border border-amber-200'
-                      : 'bg-[#FAF9F6] text-[#8C847C] border border-[#E8E4DF]'
-                  }`}
-                >
-                  {activeCallStage === 'idle' ? 'Ready' : activeCallStage}
-                </span>
-
-                {activeCallStage !== 'idle' && (
-                  <span className="text-xs font-mono text-[#5C5651] bg-[#FAF9F6] px-2.5 py-1 rounded-full border border-[#E8E4DF]">
-                    <Clock className="w-3 h-3 inline mr-1 text-[#8C847C]" />
-                    {formatSeconds(callDuration)}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Audio Waveform */}
-            <div className="py-3 flex items-center justify-between px-4 bg-[#FAF9F6] rounded-2xl my-3 border border-[#E8E4DF]">
-              <div className="flex items-center space-x-2 text-xs font-medium text-[#5C5651]">
-                <Volume2 className="w-4 h-4 text-[#8BA888]" />
-                <span>
-                  {activeCallStage === 'speaking'
-                    ? 'AI Agent Speaking...'
-                    : activeCallStage === 'listening'
-                    ? 'Customer Responding...'
-                    : 'Audio channel standby'}
-                </span>
-              </div>
-
-              {/* Mini Audio Bars */}
-              <div className="flex items-center gap-1 h-5">
-                {[40, 75, 90, 60, 100, 80, 50, 95].map((h, i) => {
-                  const isActive = activeCallStage === 'speaking' || activeCallStage === 'listening';
-                  return (
-                    <div
-                      key={i}
-                      style={{
-                        height: isActive ? `${Math.max(25, h * (Math.sin(Date.now() / 200 + i) + 1.2) / 2)}%` : '20%',
-                      }}
-                      className={`w-1 rounded-full transition-all duration-150 ${
-                        activeCallStage === 'speaking' ? 'bg-[#8BA888]' : 'bg-[#E8E4DF]'
-                      }`}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Live Transcript Stream */}
-            <div className="flex-1 overflow-y-auto py-2 space-y-3 pr-2">
-              {transcript.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-center text-[#8C847C] space-y-2">
-                  <Bot className="w-8 h-8 text-[#8BA888]/40" />
-                  <p className="text-xs font-medium text-[#5C5651]">Transcript will appear here when call connects</p>
-                  <p className="text-[11px] text-[#8C847C] max-w-xs">
-                    The AI introduces {agentSettings.companyName}, proposes a demo meeting, and collects preferred times.
-                  </p>
-                </div>
-              ) : (
-                transcript.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex items-start gap-2.5 ${
-                      msg.role === 'agent' ? 'justify-start' : 'justify-end'
-                    }`}
-                  >
-                    {msg.role === 'agent' && (
-                      <div className="w-7 h-7 rounded-full bg-[#8BA888] text-white flex items-center justify-center shrink-0 shadow-sm">
-                        <Bot className="w-3.5 h-3.5" />
-                      </div>
-                    )}
-
-                    <div
-                      className={`max-w-[82%] rounded-2xl p-3.5 text-xs leading-relaxed shadow-sm ${
-                        msg.role === 'agent'
-                          ? 'bg-[#FAF9F6] text-[#4A443F] border border-[#E8E4DF] rounded-tl-xs'
-                          : 'bg-[#2D2926] text-white rounded-tr-xs'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-3 mb-1 text-[10px] opacity-75 font-semibold">
-                        <span>{msg.role === 'agent' ? agentSettings.agentName : currentLead?.name}</span>
-                        <span>{msg.timestamp}</span>
-                      </div>
-                      <p>{msg.content}</p>
-
-                      {msg.actionTaken && (
-                        <div className="mt-2 pt-2 border-t border-[#E8E4DF] text-[11px] font-bold text-[#537050] flex items-center gap-1.5">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-[#8BA888]" />
-                          <span>{msg.actionTaken}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {msg.role === 'user' && (
-                      <div className="w-7 h-7 rounded-full bg-[#F0EDE9] border border-[#E8E4DF] text-[#4A443F] flex items-center justify-center shrink-0 shadow-sm">
-                        <User className="w-3.5 h-3.5" />
-                      </div>
-                    )}
-                  </div>
-                ))
-              )}
-              <div ref={transcriptEndRef} />
-            </div>
-
-            {/* Bottom Status Ticker */}
-            <div className="pt-3 border-t border-[#E8E4DF] flex items-center justify-between text-xs text-[#8C847C]">
-              <span className="truncate">{statusLog}</span>
+        {/* Campaign Settings Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-5">
+          {/* Channel Mode Selector */}
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#8C847C] mb-1.5">
+              Outreach Channel
+            </label>
+            <div className="grid grid-cols-3 gap-1 p-1 bg-[#F5F2EB] rounded-lg border border-[#E8E4DF]">
               <button
-                onClick={() => setIsMuted(!isMuted)}
-                className="text-xs font-semibold text-[#5C5651] hover:text-[#2D2926]"
+                id="mode-omnichannel"
+                onClick={() => setChannelMode('omnichannel')}
+                className={`py-1.5 px-2 rounded-md text-xs font-medium transition-all ${
+                  channelMode === 'omnichannel'
+                    ? 'bg-white text-[#2D2926] shadow-xs font-semibold'
+                    : 'text-[#6C635B] hover:text-[#2D2926]'
+                }`}
               >
-                {isMuted ? '🔇 Audio Muted' : '🔊 Audio Active'}
+                Both
+              </button>
+              <button
+                id="mode-whatsapp"
+                onClick={() => setChannelMode('whatsapp')}
+                className={`py-1.5 px-2 rounded-md text-xs font-medium transition-all ${
+                  channelMode === 'whatsapp'
+                    ? 'bg-[#25D366] text-white shadow-xs font-semibold'
+                    : 'text-[#6C635B] hover:text-[#2D2926]'
+                }`}
+              >
+                WhatsApp
+              </button>
+              <button
+                id="mode-email"
+                onClick={() => setChannelMode('email')}
+                className={`py-1.5 px-2 rounded-md text-xs font-medium transition-all ${
+                  channelMode === 'email'
+                    ? 'bg-[#4285F4] text-white shadow-xs font-semibold'
+                    : 'text-[#6C635B] hover:text-[#2D2926]'
+                }`}
+              >
+                Email
               </button>
             </div>
           </div>
+
+          {/* Template Selector */}
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-wider text-[#8C847C] mb-1.5">
+              Sequence Template
+            </label>
+            <select
+              id="campaign-template-select"
+              value={selectedTemplateId}
+              onChange={(e) => setSelectedTemplateId(e.target.value)}
+              className="w-full bg-[#FAF8F5] border border-[#DDD6CB] rounded-lg px-3 py-1.5 text-xs text-[#2D2926] focus:ring-1 focus:ring-[#25D366] focus:border-[#25D366] font-medium"
+            >
+              {templates.map((tpl) => (
+                <option key={tpl.id} value={tpl.id}>
+                  {tpl.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Dispatch Interval Slider */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-[11px] font-semibold uppercase tracking-wider text-[#8C847C]">
+                Pacing Interval
+              </label>
+              <span className="text-xs font-semibold text-[#2D2926]">{delaySeconds}s / contact</span>
+            </div>
+            <input
+              id="campaign-delay-slider"
+              type="range"
+              min="1"
+              max="10"
+              step="0.5"
+              value={delaySeconds}
+              onChange={(e) => setDelaySeconds(parseFloat(e.target.value))}
+              className="w-full accent-[#25D366] cursor-pointer"
+            />
+          </div>
+
+          {/* Execution Controls */}
+          <div className="flex items-end gap-2">
+            {!isRunning ? (
+              pendingLeads.length > 0 ? (
+                <button
+                  id="campaign-start-btn"
+                  onClick={handleStart}
+                  disabled={leads.length === 0}
+                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg text-white bg-gradient-to-r from-[#128C7E] to-[#25D366] hover:opacity-95 shadow-sm transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Play className="w-3.5 h-3.5 fill-white" />
+                  <span>Launch Campaign ({pendingLeads.length})</span>
+                </button>
+              ) : (
+                <button
+                  id="campaign-restart-main-btn"
+                  onClick={handleRestartAll}
+                  disabled={leads.length === 0}
+                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg text-white bg-gradient-to-r from-[#128C7E] to-[#25D366] hover:opacity-95 shadow-sm transition-all active:scale-[0.98]"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Start Automation ({totalLeadsCount} Leads)</span>
+                </button>
+              )
+            ) : isPaused ? (
+              <button
+                id="campaign-resume-btn"
+                onClick={handleResume}
+                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg text-white bg-[#25D366] hover:bg-[#1EBE5D] shadow-sm transition-all"
+              >
+                <Play className="w-3.5 h-3.5 fill-white" />
+                <span>Resume</span>
+              </button>
+            ) : (
+              <button
+                id="campaign-pause-btn"
+                onClick={handlePause}
+                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg text-[#2D2926] bg-[#F5F2EB] hover:bg-[#EAE5DC] border border-[#DDD6CB] transition-all"
+              >
+                <Pause className="w-3.5 h-3.5" />
+                <span>Pause</span>
+              </button>
+            )}
+
+            <button
+              id="campaign-restart-icon-btn"
+              onClick={handleRestartAll}
+              className="p-2 rounded-lg text-[#128C7E] bg-[#E8F5E9] hover:bg-[#C8E6C9] border border-[#A5D6A7] transition-colors"
+              title="Start automation again (re-send to all leads)"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-[#2E7D32]" />
+            </button>
+
+            <button
+              id="campaign-reset-btn"
+              onClick={handleReset}
+              className="p-2 rounded-lg text-[#8C847C] hover:text-[#2D2926] hover:bg-[#F2EFE9] border border-[#DDD6CB] transition-colors"
+              title="Reset campaign state"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
 
-        {/* Right Column: Campaign Lead Queue & Realtime Results */}
-        <div className="lg:col-span-5 space-y-4">
-          <div className="bg-white border border-[#E8E4DF] rounded-[28px] p-6 shadow-sm flex flex-col h-[560px]">
-            <div className="flex items-center justify-between pb-3 border-b border-[#E8E4DF]">
-              <div className="flex items-center space-x-2">
-                <Layers className="w-4 h-4 text-[#8BA888]" />
-                <h3 className="font-bold text-sm text-[#2D2926]">Campaign Calling Queue</h3>
-              </div>
-              <span className="text-xs font-semibold text-[#8C847C]">
-                {leads.length} Total Rows
-              </span>
+        {/* Live Channel Status & Automation Diagnostics */}
+        <div className="mt-4 p-3 bg-[#FAF8F5] rounded-xl border border-[#E8E4DF] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-semibold text-[#8C847C]">WhatsApp Dispatch:</span>
+              {channelSettings.whatsAppProvider === 'twilio' && channelSettings.twilioAccountSid ? (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  Twilio API (Pure Background)
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#7A7269] bg-[#EFECE6] px-2 py-0.5 rounded-md">
+                  Web Direct Mode (Click-to-chat)
+                </span>
+              )}
             </div>
 
-            {/* Queue List */}
-            <div className="flex-1 overflow-y-auto py-3 space-y-2.5 pr-1">
-              {leads.map((lead, idx) => {
-                const isCurrent = idx === currentIndex && isCampaignRunning;
-                return (
-                  <div
-                    key={lead.id}
-                    onClick={() => {
-                      if (!isCampaignRunning) {
-                        setCurrentIndex(idx);
-                      }
-                    }}
-                    className={`p-3.5 rounded-2xl border text-xs transition-all cursor-pointer ${
-                      isCurrent
-                        ? 'bg-[#8BA888]/10 border-[#8BA888] ring-2 ring-[#8BA888]/20 shadow-sm'
-                        : lead.status === 'Meeting Scheduled'
-                        ? 'bg-[#8BA888]/5 border-[#8BA888]/30'
-                        : lead.status === 'Invalid Number'
-                        ? 'bg-rose-50/60 border-rose-200'
-                        : 'bg-[#FAF9F6] border-[#E8E4DF] hover:bg-[#F0EDE9]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-bold text-[#2D2926] flex items-center gap-1.5">
-                        <span className="text-[10px] text-[#8C847C] font-mono">#{idx + 1}</span>
-                        <span>{lead.name}</span>
-                      </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-semibold text-[#8C847C]">Email Dispatch:</span>
+              {(channelSettings.emailProvider === 'resend' || channelSettings.emailProvider === 'sendgrid') && channelSettings.emailApiKey ? (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                  {channelSettings.emailProvider === 'resend' ? 'Resend API' : 'SendGrid API'} (Direct Inbox)
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#7A7269] bg-[#EFECE6] px-2 py-0.5 rounded-md">
+                  Mailto Mode (No API key set)
+                </span>
+              )}
+            </div>
+          </div>
 
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          lead.status === 'Meeting Scheduled'
-                            ? 'bg-[#8BA888]/20 text-[#537050]'
-                            : lead.status === 'Pending'
-                            ? 'bg-amber-100 text-amber-800'
-                            : lead.status === 'In Progress'
-                            ? 'bg-blue-100 text-blue-800 animate-pulse'
-                            : lead.status === 'Invalid Number'
-                            ? 'bg-rose-100 text-rose-800'
-                            : 'bg-[#E8E4DF] text-[#4A443F]'
+          {((channelMode !== 'whatsapp' && (!channelSettings.emailApiKey || channelSettings.emailProvider === 'mailto_direct')) ||
+            (channelMode !== 'email' && (!channelSettings.twilioAccountSid || channelSettings.whatsAppProvider === 'web_direct'))) && (
+            <button
+              onClick={onOpenChannelConfig}
+              className="text-[11px] font-semibold text-[#128C7E] hover:underline flex items-center gap-1 shrink-0"
+            >
+              <Settings className="w-3 h-3" />
+              <span>Connect API for 100% Background Sending →</span>
+            </button>
+          )}
+        </div>
+
+        {/* Campaign Finished Notification Banner */}
+        {!isRunning && pendingLeads.length === 0 && totalLeadsCount > 0 && (
+          <div className="mt-4 p-4 rounded-xl bg-gradient-to-r from-[#E8F5E9] to-[#E0F2FE] border border-[#A5D6A7] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-full bg-[#25D366] text-white flex items-center justify-center font-bold text-sm shrink-0">
+                ✓
+              </div>
+              <div>
+                <div className="text-xs font-bold text-[#1B5E20]">
+                  Campaign Cycle Complete ({totalLeadsCount} of {totalLeadsCount} Leads Engaged)
+                </div>
+                <div className="text-[11px] text-[#2E7D32]">
+                  All contacts in your spreadsheet have been processed. You can start the automated sequence again or send another follow-up round anytime.
+                </div>
+              </div>
+            </div>
+            <button
+              id="campaign-restart-banner-btn"
+              onClick={handleRestartAll}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-lg text-white bg-[#128C7E] hover:bg-[#0E6D62] shadow-sm transition-all whitespace-nowrap active:scale-[0.98]"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Start Automation One More Time</span>
+            </button>
+          </div>
+        )}
+
+        {/* Progress Bar & Status Line */}
+        <div className="mt-5 pt-4 border-t border-[#F0ECE6]">
+          <div className="flex items-center justify-between text-xs text-[#7A7269] mb-1.5">
+            <span className="font-medium">
+              Campaign Progress: {totalLeadsCount - pendingLeads.length} of {totalLeadsCount} Leads Contacted
+            </span>
+            <span className="font-semibold text-[#2D2926]">{progressPercent}%</span>
+          </div>
+          <div className="w-full bg-[#EAE5DC] h-2.5 rounded-full overflow-hidden">
+            <div
+              className="bg-gradient-to-r from-[#128C7E] via-[#25D366] to-[#4285F4] h-full transition-all duration-300 rounded-full"
+              style={{ width: `${progressPercent}%` }}
+            ></div>
+          </div>
+        </div>
+      </div>
+
+      {/* Metrics Row */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+        <div className="bg-white rounded-xl border border-[#E8E4DF] p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-[#8C847C] font-medium">Total Ingested</span>
+            <FileSpreadsheet className="w-4 h-4 text-[#8C847C]" />
+          </div>
+          <div className="text-2xl font-bold text-[#2D2926] mt-1">{totalLeadsCount}</div>
+          <div className="text-[11px] text-[#8C847C] mt-0.5">{validLeads.length} Valid contacts</div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-[#E8E4DF] p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-[#128C7E] font-medium">WhatsApp Dispatched</span>
+            <MessageSquare className="w-4 h-4 text-[#25D366]" />
+          </div>
+          <div className="text-2xl font-bold text-[#128C7E] mt-1">{completedWhatsAppCount}</div>
+          <div className="text-[11px] text-[#8C847C] mt-0.5">High direct open rate</div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-[#E8E4DF] p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-[#1967D2] font-medium">Emails Sent</span>
+            <Mail className="w-4 h-4 text-[#4285F4]" />
+          </div>
+          <div className="text-2xl font-bold text-[#1967D2] mt-1">{completedEmailCount}</div>
+          <div className="text-[11px] text-[#8C847C] mt-0.5">Synced with Google Calendar</div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-[#E8E4DF] p-4 shadow-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-[#B06000] font-medium">Meetings Booked</span>
+            <CheckCircle2 className="w-4 h-4 text-[#F29900]" />
+          </div>
+          <div className="text-2xl font-bold text-[#B06000] mt-1">{bookedCount}</div>
+          <div className="text-[11px] text-[#8C847C] mt-0.5">Google Meet invites sent</div>
+        </div>
+      </div>
+
+      {/* Main Campaign Activity Split View */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left Column: Live Active Lead & Message Personalization Stream */}
+        <div className="lg:col-span-7 space-y-4">
+          <div className="bg-white rounded-2xl border border-[#E8E4DF] p-5 shadow-xs">
+            <div className="flex items-center justify-between pb-4 border-b border-[#F0ECE6]">
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-[#25D366] animate-pulse"></div>
+                <h2 className="text-sm font-bold text-[#2D2926]">Live Outreach Personalization Stream</h2>
+              </div>
+              {isRunning && (
+                <span className="text-[11px] font-semibold text-[#128C7E] bg-[#E8F5E9] px-2 py-0.5 rounded-md border border-[#C8E6C9]">
+                  {isProcessingStep ? 'AI Formatting...' : 'Dispatching...'}
+                </span>
+              )}
+            </div>
+
+            {currentLead ? (
+              <div className="mt-4 space-y-4">
+                {/* Active Lead Header */}
+                <div className="p-3.5 bg-[#FAF9F6] rounded-xl border border-[#E8E4DF] flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold text-sm text-[#2D2926]">{currentLead.name}</div>
+                    <div className="text-xs text-[#7A7269]">
+                      {currentLead.company} • {currentLead.phone} • {currentLead.email}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => onSelectLeadForSimulator(currentLead.id)}
+                    className="text-xs font-medium text-[#128C7E] hover:underline flex items-center gap-1"
+                  >
+                    <span>View in Simulator</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {/* WhatsApp Message Preview Bubble */}
+                {(channelMode === 'omnichannel' || channelMode === 'whatsapp') && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-[#128C7E] flex items-center gap-1.5">
+                        <MessageSquare className="w-3.5 h-3.5 text-[#25D366]" />
+                        WhatsApp Message Output ({currentLead.phone})
+                      </span>
+                      <a
+                        href={generateWhatsAppLink(currentLead.phone, currentWhatsAppText)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[11px] font-medium text-[#128C7E] hover:underline flex items-center gap-1"
+                      >
+                        <span>Open Chat</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                    <div className="p-3.5 bg-[#E7F8E8] text-[#1E3A24] rounded-xl text-xs whitespace-pre-line border border-[#C8E6C9] font-sans">
+                      {currentWhatsAppText || 'Generating personalized WhatsApp hook...'}
+                    </div>
+                  </div>
+                )}
+
+                {/* Email Subject & Body Preview */}
+                {(channelMode === 'omnichannel' || channelMode === 'email') && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-[#1967D2] flex items-center gap-1.5">
+                        <Mail className="w-3.5 h-3.5 text-[#4285F4]" />
+                        Email Draft ({currentLead.email})
+                      </span>
+                      <a
+                        href={generateMailtoLink(
+                          currentLead.email,
+                          currentEmailSubject,
+                          currentEmailBody
+                        )}
+                        className="text-[11px] font-medium text-[#1967D2] hover:underline flex items-center gap-1"
+                      >
+                        <span>Open Mail Client</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                    <div className="p-3.5 bg-[#F0F4F9] text-[#1F2937] rounded-xl text-xs space-y-2 border border-[#D2E3FC]">
+                      <div className="font-semibold text-xs text-[#0F172A] pb-1.5 border-b border-[#D2E3FC]">
+                        Subject: {currentEmailSubject || 'Generating subject...'}
+                      </div>
+                      <div className="whitespace-pre-line text-xs font-sans text-[#334155]">
+                        {currentEmailBody || 'Generating personalized email body with Google Calendar booking link...'}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-center py-12 px-4">
+                {pendingLeads.length === 0 && totalLeadsCount > 0 ? (
+                  <>
+                    <div className="w-12 h-12 rounded-full bg-[#E8F5E9] border border-[#A5D6A7] flex items-center justify-center mx-auto text-[#2E7D32] mb-3">
+                      <CheckCircle2 className="w-6 h-6 text-[#25D366]" />
+                    </div>
+                    <h3 className="text-sm font-bold text-[#2D2926]">Campaign Complete</h3>
+                    <p className="text-xs text-[#8C847C] max-w-md mx-auto mt-1 mb-4">
+                      All {totalLeadsCount} contacts in your spreadsheet have been engaged via {channelMode === 'omnichannel' ? 'WhatsApp & Email' : channelMode}. Ready to run the automation again?
+                    </p>
+                    <button
+                      id="campaign-restart-stream-btn"
+                      onClick={handleRestartAll}
+                      className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg text-white bg-gradient-to-r from-[#128C7E] to-[#25D366] hover:opacity-95 shadow-sm transition-all active:scale-[0.98]"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Start Automation One More Time</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-12 h-12 rounded-full bg-[#FAF8F5] border border-[#DDD6CB] flex items-center justify-center mx-auto text-[#8C847C] mb-3">
+                      <Send className="w-5 h-5 text-[#8C847C]" />
+                    </div>
+                    <h3 className="text-sm font-semibold text-[#2D2926]">Campaign Ready for Launch</h3>
+                    <p className="text-xs text-[#8C847C] max-w-md mx-auto mt-1">
+                      Click "Launch Campaign" to automatically cycle through your spreadsheet contacts, generate AI personalized copy, and dispatch WhatsApp and Email messages.
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right Column: Live Dispatch Feed & Audit Logs */}
+        <div className="lg:col-span-5 space-y-4">
+          <div className="bg-white rounded-2xl border border-[#E8E4DF] p-5 shadow-xs">
+            <div className="flex items-center justify-between pb-4 border-b border-[#F0ECE6]">
+              <h2 className="text-sm font-bold text-[#2D2926] flex items-center gap-2">
+                <Clock className="w-4 h-4 text-[#8C847C]" />
+                Live Dispatch Activity
+              </h2>
+              <span className="text-xs text-[#8C847C]">{dispatchLogs.length} logs</span>
+            </div>
+
+            <div className="mt-3 divide-y divide-[#F0ECE6] max-h-[460px] overflow-y-auto no-scrollbar">
+              {dispatchLogs.length > 0 ? (
+                dispatchLogs.map((log) => (
+                  <div key={log.id} className="py-2.5 flex items-start justify-between gap-3 text-xs">
+                    <div className="flex items-start gap-2.5">
+                      <div
+                        className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
+                          log.channel === 'whatsapp'
+                            ? 'bg-[#E8F5E9] text-[#25D366]'
+                            : 'bg-[#E8F0FE] text-[#4285F4]'
                         }`}
                       >
-                        {isCurrent ? '⚡ Calling Now' : lead.status}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center justify-between text-[#5C5651] text-[11px] font-mono">
-                      <span>{lead.phone}</span>
-                      <span className="text-[#8C847C] font-sans truncate max-w-[120px]">{lead.company}</span>
-                    </div>
-
-                    {lead.meetingDate && (
-                      <div className="mt-1.5 pt-1.5 border-t border-[#E8E4DF]/60 text-[11px] font-semibold text-[#537050] flex items-center gap-1">
-                        <Calendar className="w-3 h-3 text-[#8BA888]" />
-                        <span>Booked: {lead.meetingDate} at {lead.meetingTime}</span>
+                        {log.channel === 'whatsapp' ? (
+                          <MessageSquare className="w-3.5 h-3.5" />
+                        ) : (
+                          <Mail className="w-3.5 h-3.5" />
+                        )}
                       </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                      <div>
+                        <div className="font-semibold text-[#2D2926] flex items-center gap-1.5">
+                          <span>{log.leadName}</span>
+                          <span className="text-[10px] text-[#8C847C] font-normal">({log.recipient})</span>
+                        </div>
+                        <p className="text-[11px] text-[#7A7269] line-clamp-1 mt-0.5">
+                          {log.preview}
+                        </p>
+                      </div>
+                    </div>
 
-            {/* Delay & Settings Footer */}
-            <div className="pt-3 border-t border-[#E8E4DF] flex items-center justify-between text-xs text-[#5C5651]">
-              <div className="flex items-center space-x-2">
-                <Clock className="w-3.5 h-3.5 text-[#8C847C]" />
-                <span>Delay between calls:</span>
-                <select
-                  value={delaySeconds}
-                  onChange={(e) => setDelaySeconds(Number(e.target.value))}
-                  disabled={isCampaignRunning}
-                  className="bg-[#FAF9F6] border border-[#E8E4DF] rounded-lg px-2 py-1 text-xs font-semibold text-[#2D2926] focus:outline-none"
-                >
-                  <option value={2}>2 seconds</option>
-                  <option value={3}>3 seconds</option>
-                  <option value={5}>5 seconds</option>
-                  <option value={10}>10 seconds</option>
-                </select>
-              </div>
+                    <div className="text-right shrink-0">
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#2E7D32] bg-[#E8F5E9] px-2 py-0.5 rounded-full">
+                        <CheckCircle2 className="w-2.5 h-2.5" />
+                        {log.channel === 'whatsapp' ? 'Delivered' : 'Sent'}
+                      </span>
+                      <div className="text-[10px] text-[#A69F96] mt-0.5">{log.timestamp}</div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-center py-8 text-xs text-[#8C847C]">
+                  No dispatches yet in this session. Start the campaign to see real-time delivery logs.
+                </div>
+              )}
             </div>
           </div>
         </div>

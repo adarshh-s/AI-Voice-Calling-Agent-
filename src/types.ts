@@ -3,11 +3,21 @@ export type LeadStatus =
   | 'In Progress'
   | 'Contacted'
   | 'Interested'
-  | 'Not Interested'
-  | 'No Answer'
   | 'Meeting Scheduled'
+  | 'Not Interested'
+  | 'Replied'
   | 'Do Not Contact'
-  | 'Invalid Number'
+  | 'Failed';
+
+export type ChannelDeliveryStatus =
+  | 'Pending'
+  | 'Queued'
+  | 'Sent'
+  | 'Delivered'
+  | 'Read'
+  | 'Opened'
+  | 'Clicked'
+  | 'Replied'
   | 'Failed';
 
 export interface Lead {
@@ -18,14 +28,19 @@ export interface Lead {
   rawPhone?: string;
   email: string;
   status: LeadStatus;
-  callResult: string;
-  meetingDate: string;
-  meetingTime: string;
-  notes: string;
-  lastCalled: string;
-  durationSeconds?: number;
-  customFields?: Record<string, string>;
+  whatsAppStatus: ChannelDeliveryStatus;
+  emailStatus: ChannelDeliveryStatus;
+  whatsAppMessage?: string;
+  emailSubject?: string;
+  emailBody?: string;
+  meetingDate?: string;
+  meetingTime?: string;
+  notes?: string;
+  lastContacted?: string;
+  channelUsed?: 'omnichannel' | 'whatsapp' | 'email' | 'none';
   isValidPhone: boolean;
+  isValidEmail: boolean;
+  customFields?: Record<string, string>;
 }
 
 export interface CalendarSlot {
@@ -36,57 +51,53 @@ export interface CalendarSlot {
   available: boolean;
   bookedBy?: string;
   leadEmail?: string;
+  leadPhone?: string;
   title?: string;
   meetLink?: string;
 }
 
-export interface TranscriptMessage {
+export interface MessageTemplate {
   id: string;
-  role: 'agent' | 'user' | 'system';
-  content: string;
-  timestamp: string;
-  actionTaken?: string;
+  name: string;
+  category: 'discovery' | 'followup' | 'meeting_invite' | 'product_demo' | 're_engagement' | 'custom';
+  channel: 'omnichannel' | 'whatsapp' | 'email';
+  whatsAppContent: string;
+  emailSubject: string;
+  emailBody: string;
 }
 
-export type CallStage =
-  | 'idle'
-  | 'dialing'
-  | 'connected'
-  | 'speaking'
-  | 'listening'
-  | 'processing'
-  | 'booking'
-  | 'completed'
-  | 'failed';
-
-export interface AgentSettings {
+export interface CampaignSettings {
+  channelMode: 'omnichannel' | 'whatsapp' | 'email';
+  selectedTemplateId: string;
+  delayBetweenMessagesSeconds: number;
+  autoAdvance: boolean;
   companyName: string;
+  senderName: string;
+  senderEmail: string;
+  senderPhone: string;
   serviceDescription: string;
-  targetAudience: string;
-  agentName: string;
-  voiceName: string;
-  speechRate: number;
-  pitch: number;
-  temperature: number;
-  interruptible: boolean;
-  maxCallDurationSeconds: number;
-  customSystemPrompt?: string;
   defaultCountryCode: string; // e.g. '+91', '+1', '+44'
-  scriptType: 'b2b_sales' | 'lead_qualification' | 'appointment_booking' | 'customer_feedback' | 'custom';
+  includeBookingLink: boolean;
+  customInstructions?: string;
 }
 
-export type TelephonyProvider = 'browser' | 'vapi' | 'retell' | 'twilio' | 'webhook';
+export type WhatsAppProvider = 'web_direct' | 'twilio' | 'cloud_api' | 'webhook';
+export type EmailProvider = 'mailto_direct' | 'sendgrid' | 'resend' | 'smtp' | 'webhook';
 
-export interface TelephonySettings {
-  provider: TelephonyProvider;
-  vapiApiKey?: string;
-  vapiPhoneNumberId?: string;
-  vapiAssistantId?: string;
-  retellApiKey?: string;
-  retellAgentId?: string;
+export interface ChannelApiSettings {
+  whatsAppProvider: WhatsAppProvider;
   twilioAccountSid?: string;
   twilioAuthToken?: string;
-  twilioPhoneNumber?: string;
+  twilioFromNumber?: string;
+  whatsappCloudApiKey?: string;
+  whatsappCloudPhoneId?: string;
+
+  emailProvider: EmailProvider;
+  emailApiKey?: string;
+  smtpHost?: string;
+  smtpUser?: string;
+  smtpPass?: string;
+  
   n8nWebhookUrl?: string;
 }
 
@@ -96,12 +107,12 @@ export interface CampaignState {
   status: 'idle' | 'running' | 'paused' | 'completed';
   currentIndex: number;
   totalLeads: number;
-  completedCalls: number;
+  completedWhatsApp: number;
+  completedEmail: number;
   meetingsBooked: number;
-  failedCalls: number;
+  failedDispatches: number;
   skippedInvalid: number;
-  delayBetweenCallsSeconds: number;
-  autoAdvance: boolean;
+  delaySeconds: number;
   startedAt?: string;
 }
 
@@ -113,12 +124,25 @@ export interface ColumnMapping {
   notes: string;
 }
 
-export interface CallSummaryResult {
-  status: LeadStatus;
-  callResult: string;
-  notes: string;
-  meetingScheduled: boolean;
-  meetingDate?: string;
-  meetingTime?: string;
-  doNotContact: boolean;
+export interface OutreachDispatchLog {
+  id: string;
+  leadId: string;
+  leadName: string;
+  recipient: string;
+  channel: 'whatsapp' | 'email';
+  status: 'sent' | 'delivered' | 'failed';
+  timestamp: string;
+  subject?: string;
+  preview: string;
+  directUrl?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  sender: 'ai_agent' | 'client';
+  channel: 'whatsapp' | 'email';
+  content: string;
+  subject?: string;
+  timestamp: string;
+  status?: 'sent' | 'delivered' | 'read';
 }

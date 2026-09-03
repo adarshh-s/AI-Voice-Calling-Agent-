@@ -123,53 +123,14 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
       .map((s) => `${s.date} at ${s.time}`)
       .join(', ') || 'Thursday at 10:00 AM or Friday at 3:00 PM';
 
-    if (!apiKey) {
-      // Intelligent fallback
-      const lastUserMsg = (messages?.[messages.length - 1]?.content || '').toLowerCase();
-      let reply = '';
-      let functionCall: { name: string; args: Record<string, unknown> } | null = null;
+    let responseText = '';
+    let responseFunctionCall: { name: string; args: Record<string, unknown> } | null = null;
+    let isSimulated = false;
 
-      if (!messages || messages.length === 0) {
-        reply = `Hi, may I speak with ${clientName}?`;
-      } else if (lastUserMsg.includes('speaking') || lastUserMsg.includes('yes') || lastUserMsg.includes('this is')) {
-        reply = `Hi ${clientName}, I'm ${agentSettings?.agentName || 'Alex'} calling on behalf of ${callerCompany}. I'll keep this very brief. We're reaching out to see if you'd be interested in learning about our automated AI workflows. Do you have a quick minute?`;
-      } else if (lastUserMsg.includes('busy') || lastUserMsg.includes("can't talk") || lastUserMsg.includes('later')) {
-        reply = `No problem at all! Would you prefer that we schedule a quick 10-minute meeting at a more convenient time?`;
-      } else if (lastUserMsg.includes('not interested') || lastUserMsg.includes('no thanks') || lastUserMsg.includes('stop')) {
-        reply = `Understood, thank you for your time. Have a wonderful day!`;
-        functionCall = {
-          name: 'end_call',
-          args: { reason: 'not_interested', farewellMessage: 'Understood, thank you for your time. Have a wonderful day!' },
-        };
-      } else if (lastUserMsg.includes('remove') || lastUserMsg.includes('do not contact')) {
-        reply = `I completely understand. I'm removing your number from our contact list right now. Have a good day.`;
-        functionCall = {
-          name: 'update_call_status',
-          args: { status: 'Do Not Contact', callResult: 'Do Not Contact', notes: 'Client requested removal from call list.' },
-        };
-      } else if (lastUserMsg.includes('sure') || lastUserMsg.includes('interested') || lastUserMsg.includes('tell me more') || lastUserMsg.includes('yes')) {
-        reply = `Great! We have Tuesday at 11 AM or Wednesday at 3 PM available for a quick 15-minute demo. Which works better for you?`;
-      } else if (lastUserMsg.includes('tuesday') || lastUserMsg.includes('wednesday') || lastUserMsg.includes('11') || lastUserMsg.includes('3') || lastUserMsg.includes('thursday') || lastUserMsg.includes('friday')) {
-        reply = `Perfect, I've booked that slot on our calendar and sent the Google Meet link to ${lead?.email || 'your email'}. We look forward to speaking with you!`;
-        functionCall = {
-          name: 'book_calendar_meeting',
-          args: {
-            date: '2026-09-04',
-            time: '11:00 AM',
-            clientName: clientName,
-            clientEmail: lead?.email,
-            meetingNotes: 'Demo call scheduled via AI voice agent',
-          },
-        };
-      } else {
-        reply = `I understand. We help teams automate repetitive workflows with AI. Would you be open to a quick 10-minute overview this week?`;
-      }
-
-      return res.status(200).json({ reply, functionCall, simulated: true });
-    }
-
-    const ai = new GoogleGenAI({ apiKey });
-    const systemInstruction = `You are ${agentSettings?.agentName || 'Alex'}, an AI voice calling assistant calling on behalf of ${callerCompany}.
+    if (apiKey) {
+      try {
+        const ai = new GoogleGenAI({ apiKey });
+        const systemInstruction = `You are ${agentSettings?.agentName || 'Alex'}, an AI voice calling assistant calling on behalf of ${callerCompany}.
 You are on a live phone call with ${clientName} from ${company}.
 
 CALL OBJECTIVE & BEHAVIOR:
@@ -188,48 +149,162 @@ ${customPrompt}
 Available open Google Calendar slots right now: ${slotsText}.
 `;
 
-    const contents = (messages || []).map((m) => ({
-      role: m.role === 'agent' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    }));
+        const contents = (messages || []).map((m) => ({
+          role: m.role === 'agent' ? 'model' : 'user',
+          parts: [{ text: m.content }],
+        }));
 
-    if (contents.length === 0) {
-      contents.push({
-        role: 'user',
-        parts: [{ text: `[System]: The phone just connected. Give the exact opening greeting to ask for ${clientName}.` }],
-      });
-    }
+        if (contents.length === 0) {
+          contents.push({
+            role: 'user',
+            parts: [{ text: `[System]: The phone just connected. Give the exact opening greeting to ask for ${clientName}.` }],
+          });
+        }
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
-      contents,
-      config: {
-        systemInstruction,
-        temperature: agentSettings?.temperature || 0.2,
-        tools: [
-          {
-            functionDeclarations: [
-              checkAvailableSlotsTool,
-              bookCalendarMeetingTool,
-              updateCallStatusTool,
-              endCallTool,
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents,
+          config: {
+            systemInstruction,
+            temperature: agentSettings?.temperature || 0.2,
+            tools: [
+              {
+                functionDeclarations: [
+                  checkAvailableSlotsTool,
+                  bookCalendarMeetingTool,
+                  updateCallStatusTool,
+                  endCallTool,
+                ],
+              },
             ],
           },
-        ],
-      },
-    });
+        });
 
-    const reply = response.text || '';
-    const functionCalls = response.functionCalls;
-    const firstCall = functionCalls && functionCalls.length > 0 ? functionCalls[0] : null;
+        responseText = response.text || '';
+        const functionCalls = response.functionCalls;
+        const firstCall = functionCalls && functionCalls.length > 0 ? functionCalls[0] : null;
+        if (firstCall) {
+          responseFunctionCall = { name: firstCall.name, args: (firstCall.args as Record<string, unknown>) || {} };
+        }
+      } catch (geminiError) {
+        console.info('Gemini rate limit or demand spike, gracefully using fallback engine:', (geminiError as Error).message);
+        isSimulated = true;
+      }
+    } else {
+      isSimulated = true;
+    }
+
+    if (!responseText && !responseFunctionCall) {
+      const lastUserMsg = (messages?.[messages.length - 1]?.content || '').toLowerCase();
+
+      if (!messages || messages.length === 0) {
+        responseText = `Hi, may I speak with ${clientName}?`;
+      } else if (
+        lastUserMsg.includes('speaking') ||
+        lastUserMsg.includes('this is') ||
+        lastUserMsg.includes('yes') ||
+        lastUserMsg.includes('hello') ||
+        lastUserMsg.includes('who is this') ||
+        lastUserMsg.includes("who's this")
+      ) {
+        responseText = `Hi ${clientName}, I'm ${agentSettings?.agentName || 'Alex'} calling on behalf of ${callerCompany}. I'll keep this very brief. We help teams automate repetitive phone outreach and booking directly from spreadsheets. Do you have a quick minute?`;
+      } else if (
+        lastUserMsg.includes('busy') ||
+        lastUserMsg.includes("can't talk") ||
+        lastUserMsg.includes('in a meeting') ||
+        lastUserMsg.includes('call back') ||
+        lastUserMsg.includes('later')
+      ) {
+        responseText = `No problem at all! Would you prefer that we schedule a quick 10-minute meeting at a more convenient time?`;
+        responseFunctionCall = {
+          name: 'check_available_slots',
+          args: {},
+        };
+      } else if (
+        lastUserMsg.includes('not interested') ||
+        lastUserMsg.includes('no thanks') ||
+        lastUserMsg.includes('pass') ||
+        lastUserMsg.includes('stop')
+      ) {
+        responseText = `Understood, thank you so much for your time. Have a wonderful day!`;
+        responseFunctionCall = {
+          name: 'end_call',
+          args: { reason: 'not_interested', farewellMessage: 'Understood, thank you for your time. Have a wonderful day!' },
+        };
+      } else if (
+        lastUserMsg.includes('remove') ||
+        lastUserMsg.includes('do not contact') ||
+        lastUserMsg.includes('take me off') ||
+        lastUserMsg.includes('dnc')
+      ) {
+        responseText = `I completely understand. I'm removing your number from our contact list right now. Have a good day.`;
+        responseFunctionCall = {
+          name: 'update_call_status',
+          args: { status: 'Do Not Contact', callResult: 'Do Not Contact', notes: 'Client requested removal from call list.' },
+        };
+      } else if (
+        lastUserMsg.includes('tuesday') ||
+        lastUserMsg.includes('wednesday') ||
+        lastUserMsg.includes('thursday') ||
+        lastUserMsg.includes('friday') ||
+        lastUserMsg.includes('10') ||
+        lastUserMsg.includes('11') ||
+        lastUserMsg.includes('2') ||
+        lastUserMsg.includes('3') ||
+        lastUserMsg.includes('4') ||
+        lastUserMsg.includes('works') ||
+        lastUserMsg.includes('sounds good') ||
+        lastUserMsg.includes('book it') ||
+        lastUserMsg.includes('perfect')
+      ) {
+        const slot = (availableSlots || []).find((s) => s.available) || {
+          date: '2026-09-04',
+          time: '11:00 AM',
+        };
+        responseText = `Perfect! I've booked ${slot.date} at ${slot.time} on our calendar and sent the Google Meet invite to ${lead?.email || 'your email'}. Thank you and have a great day!`;
+        responseFunctionCall = {
+          name: 'book_calendar_meeting',
+          args: {
+            date: slot.date,
+            time: slot.time,
+            clientName: clientName,
+            clientEmail: lead?.email,
+            meetingNotes: 'Demo call scheduled via AI voice agent',
+          },
+        };
+      } else if (
+        lastUserMsg.includes('sure') ||
+        lastUserMsg.includes('interested') ||
+        lastUserMsg.includes('tell me more') ||
+        lastUserMsg.includes('how does it work') ||
+        lastUserMsg.includes('price') ||
+        lastUserMsg.includes('cost') ||
+        lastUserMsg.includes('go ahead')
+      ) {
+        responseText = `Great! We have open slots on ${slotsText} for a quick 10-minute demo. Which time works best for you?`;
+        responseFunctionCall = {
+          name: 'check_available_slots',
+          args: {},
+        };
+      } else {
+        responseText = `We help businesses save hours each week by automating outbound client calls. Would you be open to a quick 10-minute demo this week? We have open slots on ${slotsText}.`;
+        responseFunctionCall = {
+          name: 'check_available_slots',
+          args: {},
+        };
+      }
+    }
 
     return res.status(200).json({
-      reply,
-      functionCall: firstCall ? { name: firstCall.name, args: firstCall.args } : null,
-      simulated: false,
+      reply: responseText,
+      functionCall: responseFunctionCall,
+      simulated: isSimulated,
     });
-  } catch (err: unknown) {
-    const error = err as { message?: string };
-    return res.status(500).json({ error: error.message || 'Internal server error' });
+  } catch {
+    return res.status(200).json({
+      reply: `Hi, thank you for your time. Would you be open to a quick 10-minute overview this week?`,
+      functionCall: { name: 'check_available_slots', args: {} },
+      simulated: true,
+    });
   }
 }

@@ -1,6 +1,6 @@
 {
-  "name": "AutoDialer AI Platform",
-  "description": "Enterprise automated AI outbound calling platform that ingests Excel spreadsheets, sanitizes client phone numbers to E.164, runs automated voice calls, and books Google Calendar meetings.",
-  "requestFramePermissions": ["microphone"],
+  "name": "OmniReach AI - Excel WhatsApp & Email Automation",
+  "description": "Automated omnichannel outreach platform that ingests Excel spreadsheets and automatically dispatches AI-personalized WhatsApp messages and Emails to clients with calendar booking links.",
+  "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

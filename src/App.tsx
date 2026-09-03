@@ -1,23 +1,31 @@
 import React, { useState, useEffect } from 'react';
 import { Header, ActiveTab } from './components/Header';
 import { BatchCampaignRunner } from './components/BatchCampaignRunner';
-import { CallSimulator } from './components/CallSimulator';
+import { MessageSimulator } from './components/MessageSimulator';
 import { SheetsView } from './components/SheetsView';
 import { CalendarView } from './components/CalendarView';
 import { CampaignAnalytics } from './components/CampaignAnalytics';
 import { N8nWorkflowView } from './components/N8nWorkflowView';
 import { ArchitectureView } from './components/ArchitectureView';
-import { PromptConfigView } from './components/PromptConfigView';
+import { TemplateManagerView } from './components/TemplateManagerView';
 import { ExcelUploadModal } from './components/ExcelUploadModal';
-import { TelephonyConfigModal } from './components/TelephonyConfigModal';
-import { Lead, CalendarSlot, AgentSettings, TelephonySettings } from './types';
-import { INITIAL_LEADS, INITIAL_CALENDAR_SLOTS, DEFAULT_AGENT_SETTINGS } from './data/sampleLeads';
+import { ChannelConfigModal } from './components/ChannelConfigModal';
+import {
+  Lead,
+  CalendarSlot,
+  CampaignSettings,
+  ChannelApiSettings,
+  MessageTemplate,
+} from './types';
+import { INITIAL_LEADS, INITIAL_CALENDAR_SLOTS } from './data/sampleLeads';
+import { DEFAULT_TEMPLATES, DEFAULT_CAMPAIGN_SETTINGS } from './data/sampleTemplates';
 
-const DEFAULT_TELEPHONY_SETTINGS: TelephonySettings = {
-  provider: 'browser',
-  vapiApiKey: '',
-  vapiPhoneNumberId: '',
-  vapiAssistantId: '',
+const DEFAULT_CHANNEL_SETTINGS: ChannelApiSettings = {
+  whatsAppProvider: 'web_direct',
+  emailProvider: 'mailto_direct',
+  twilioAccountSid: '',
+  twilioAuthToken: '',
+  emailApiKey: '',
   n8nWebhookUrl: '',
 };
 
@@ -27,27 +35,12 @@ export default function App() {
   // Leads State with LocalStorage Persistence
   const [leads, setLeads] = useState<Lead[]>(() => {
     if (typeof window !== 'undefined') {
-      try {
-        localStorage.removeItem('ai_agent_leads_v2');
-      } catch {}
-      const saved = localStorage.getItem('ai_agent_leads_v3');
+      const saved = localStorage.getItem('omnireach_leads_v1');
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            // Ensure no legacy personal phone number remains
-            return parsed.map((l: Lead) => {
-              if (l.name?.toLowerCase().includes('adarsh') || l.phone?.includes('9061584951')) {
-                return {
-                  ...l,
-                  name: 'Alex Morgan',
-                  phone: '+919876543211',
-                  rawPhone: '9876543211',
-                  email: 'alex.morgan@acmesolutions.example',
-                };
-              }
-              return l;
-            });
+            return parsed;
           }
         } catch {}
       }
@@ -58,7 +51,7 @@ export default function App() {
   // Calendar Slots State
   const [calendarSlots, setCalendarSlots] = useState<CalendarSlot[]>(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('ai_agent_slots_v2');
+      const saved = localStorage.getItem('omnireach_slots_v1');
       if (saved) {
         try {
           return JSON.parse(saved);
@@ -68,55 +61,75 @@ export default function App() {
     return INITIAL_CALENDAR_SLOTS;
   });
 
-  // Agent Settings State
-  const [agentSettings, setAgentSettings] = useState<AgentSettings>(() => {
+  // Campaign Settings
+  const [campaignSettings, setCampaignSettings] = useState<CampaignSettings>(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('ai_agent_settings_v2');
+      const saved = localStorage.getItem('omnireach_campaign_settings_v1');
       if (saved) {
         try {
           return JSON.parse(saved);
         } catch {}
       }
     }
-    return DEFAULT_AGENT_SETTINGS;
+    return DEFAULT_CAMPAIGN_SETTINGS;
   });
 
-  // Telephony Settings State
-  const [telephonySettings, setTelephonySettings] = useState<TelephonySettings>(() => {
+  // Templates
+  const [templates, setTemplates] = useState<MessageTemplate[]>(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('ai_agent_telephony_v2');
+      const saved = localStorage.getItem('omnireach_templates_v1');
       if (saved) {
         try {
           return JSON.parse(saved);
         } catch {}
       }
     }
-    return DEFAULT_TELEPHONY_SETTINGS;
+    return DEFAULT_TEMPLATES;
+  });
+
+  // Channel API Settings
+  const [channelSettings, setChannelSettings] = useState<ChannelApiSettings>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('omnireach_channels_v1');
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch {}
+      }
+    }
+    return DEFAULT_CHANNEL_SETTINGS;
   });
 
   // Modals State
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
-  const [isTelephonyModalOpen, setIsTelephonyModalOpen] = useState(false);
+  const [isChannelModalOpen, setIsChannelModalOpen] = useState(false);
 
-  // Selected Lead for Single Simulator
+  // Selected Lead for Simulator
   const [selectedLeadId, setSelectedLeadId] = useState<string>(leads[0]?.id || 'lead-1');
 
   // Sync to LocalStorage
   useEffect(() => {
-    localStorage.setItem('ai_agent_leads_v3', JSON.stringify(leads));
+    localStorage.setItem('omnireach_leads_v1', JSON.stringify(leads));
   }, [leads]);
 
   useEffect(() => {
-    localStorage.setItem('ai_agent_slots_v2', JSON.stringify(calendarSlots));
+    localStorage.setItem('omnireach_slots_v1', JSON.stringify(calendarSlots));
   }, [calendarSlots]);
 
   useEffect(() => {
-    localStorage.setItem('ai_agent_settings_v2', JSON.stringify(agentSettings));
-  }, [agentSettings]);
+    localStorage.setItem(
+      'omnireach_campaign_settings_v1',
+      JSON.stringify(campaignSettings)
+    );
+  }, [campaignSettings]);
 
   useEffect(() => {
-    localStorage.setItem('ai_agent_telephony_v2', JSON.stringify(telephonySettings));
-  }, [telephonySettings]);
+    localStorage.setItem('omnireach_templates_v1', JSON.stringify(templates));
+  }, [templates]);
+
+  useEffect(() => {
+    localStorage.setItem('omnireach_channels_v1', JSON.stringify(channelSettings));
+  }, [channelSettings]);
 
   // Lead CRUD handlers
   const handleUpdateLead = (updated: Lead) => {
@@ -140,6 +153,17 @@ export default function App() {
     setSelectedLeadId(INITIAL_LEADS[0].id);
   };
 
+  const handleResetAllLeadsToPending = () => {
+    setLeads((prev) =>
+      prev.map((l) => ({
+        ...l,
+        status: 'Pending',
+        whatsAppStatus: 'Pending',
+        emailStatus: 'Pending',
+      }))
+    );
+  };
+
   const handleImportLeads = (importedLeads: Lead[], appendMode: boolean) => {
     if (appendMode) {
       setLeads((prev) => [...prev, ...importedLeads]);
@@ -149,7 +173,6 @@ export default function App() {
     if (importedLeads.length > 0) {
       setSelectedLeadId(importedLeads[0].id);
     }
-    // Switch to campaign or sheets view
     setActiveTab('campaign');
   };
 
@@ -163,7 +186,8 @@ export default function App() {
               available: false,
               bookedBy: lead.name,
               leadEmail: lead.email,
-              title: `${lead.company || lead.name} Discovery Call with Alex`,
+              leadPhone: lead.phone,
+              title: `${lead.company || lead.name} Discovery Demo with ${campaignSettings.senderName}`,
               meetLink: `https://meet.google.com/${Math.random().toString(36).substring(2, 5)}-${Math.random().toString(36).substring(2, 6)}-${Math.random().toString(36).substring(2, 5)}`,
             }
           : slot
@@ -191,6 +215,7 @@ export default function App() {
               available: true,
               bookedBy: undefined,
               leadEmail: undefined,
+              leadPhone: undefined,
               title: undefined,
               meetLink: undefined,
             }
@@ -199,13 +224,12 @@ export default function App() {
     );
   };
 
-  const handleTriggerSingleCall = (leadId: string) => {
+  const handleOpenLeadInSimulator = (leadId: string) => {
     setSelectedLeadId(leadId);
     setActiveTab('simulator');
   };
 
   const handleStartCampaignWithSelected = (selectedIds: string[]) => {
-    // Bring selected leads to top or filter
     const selected = leads.filter((l) => selectedIds.includes(l.id));
     const unselected = leads.filter((l) => !selectedIds.includes(l.id));
     setLeads([...selected, ...unselected]);
@@ -216,20 +240,20 @@ export default function App() {
   const scheduledCount = leads.filter((l) => l.status === 'Meeting Scheduled').length;
 
   return (
-    <div className="min-h-screen bg-[#FAF9F6] text-[#4A443F] flex flex-col selection:bg-[#8BA888]/30 selection:text-[#2D2926] font-sans">
+    <div className="min-h-screen bg-[#FAF9F6] text-[#4A443F] flex flex-col font-sans">
       {/* Global Modals */}
       <ExcelUploadModal
         isOpen={isExcelModalOpen}
         onClose={() => setIsExcelModalOpen(false)}
         onImportLeads={handleImportLeads}
-        defaultCountryCode={agentSettings.defaultCountryCode || '+91'}
+        defaultCountryCode={campaignSettings.defaultCountryCode || '+91'}
       />
 
-      <TelephonyConfigModal
-        isOpen={isTelephonyModalOpen}
-        onClose={() => setIsTelephonyModalOpen(false)}
-        settings={telephonySettings}
-        onSaveSettings={setTelephonySettings}
+      <ChannelConfigModal
+        isOpen={isChannelModalOpen}
+        onClose={() => setIsChannelModalOpen(false)}
+        settings={channelSettings}
+        onSaveSettings={setChannelSettings}
       />
 
       {/* Main Header with Navigation */}
@@ -247,12 +271,15 @@ export default function App() {
           <BatchCampaignRunner
             leads={leads}
             availableSlots={calendarSlots}
-            agentSettings={agentSettings}
-            telephonySettings={telephonySettings}
+            campaignSettings={campaignSettings}
+            channelSettings={channelSettings}
+            templates={templates}
             onUpdateLead={handleUpdateLead}
+            onResetAllLeadsToPending={handleResetAllLeadsToPending}
             onBookCalendarSlot={handleBookCalendarSlot}
-            onOpenTelephonyConfig={() => setIsTelephonyModalOpen(true)}
+            onOpenChannelConfig={() => setIsChannelModalOpen(true)}
             onOpenExcelUpload={() => setIsExcelModalOpen(true)}
+            onSelectLeadForSimulator={handleOpenLeadInSimulator}
           />
         )}
 
@@ -263,21 +290,33 @@ export default function App() {
             onUpdateLead={handleUpdateLead}
             onDeleteLead={handleDeleteLead}
             onResetLeads={handleResetLeads}
-            onTriggerCall={handleTriggerSingleCall}
+            onSelectLeadForSimulator={handleOpenLeadInSimulator}
             onOpenExcelUpload={() => setIsExcelModalOpen(true)}
             onStartCampaignWithSelected={handleStartCampaignWithSelected}
           />
         )}
 
         {activeTab === 'simulator' && (
-          <CallSimulator
+          <MessageSimulator
             leads={leads}
             selectedLeadId={selectedLeadId}
             onSelectLead={setSelectedLeadId}
             availableSlots={calendarSlots}
-            agentSettings={agentSettings}
+            campaignSettings={campaignSettings}
+            templates={templates}
             onUpdateLead={handleUpdateLead}
             onBookCalendarSlot={handleBookCalendarSlot}
+          />
+        )}
+
+        {activeTab === 'templates' && (
+          <TemplateManagerView
+            templates={templates}
+            onUpdateTemplates={setTemplates}
+            campaignSettings={campaignSettings}
+            onUpdateSettings={setCampaignSettings}
+            leads={leads}
+            availableSlots={calendarSlots}
           />
         )}
 
@@ -294,19 +333,11 @@ export default function App() {
         {activeTab === 'n8n' && <N8nWorkflowView />}
 
         {activeTab === 'architecture' && <ArchitectureView />}
-
-        {activeTab === 'prompt' && (
-          <PromptConfigView
-            agentSettings={agentSettings}
-            onUpdateSettings={setAgentSettings}
-            leads={leads}
-          />
-        )}
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-[#E8E4DF] bg-white/70 py-4 text-center text-xs text-[#8C847C]">
-        AutoDialer AI • Spreadsheet Ingestion & Automatic Outbound Calling Engine • Gemini 3.7 Flash & Google Calendar
+      <footer className="border-t border-[#E8E4DF] bg-white/80 py-4 text-center text-xs text-[#8C847C]">
+        OmniReach AI • Automated WhatsApp & Email Outreach Engine with Spreadsheet Ingestion & Google Calendar Sync • Powered by Gemini 3.7
       </footer>
     </div>
   );

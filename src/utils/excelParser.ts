@@ -194,9 +194,10 @@ export function convertRowsToLeads(
     const rawEmail = String(row[mapping.email] || '').trim();
     const rawNotes = String(row[mapping.notes] || '').trim();
 
-    const { formatted, isValid } = sanitizePhoneNumber(rawPhone, defaultCountryCode);
+    const { formatted, isValid: isPhoneValid } = sanitizePhoneNumber(rawPhone, defaultCountryCode);
+    const isEmailValid = Boolean(rawEmail && rawEmail.includes('@') && rawEmail.includes('.'));
 
-    if (isValid) {
+    if (isPhoneValid || isEmailValid) {
       validCount++;
     } else {
       invalidCount++;
@@ -209,13 +210,15 @@ export function convertRowsToLeads(
       phone: formatted || String(rawPhone || ''),
       rawPhone: String(rawPhone || ''),
       email: rawEmail,
-      status: isValid ? 'Pending' : 'Invalid Number',
-      callResult: isValid ? '' : 'Invalid phone number format',
+      status: 'Pending',
+      whatsAppStatus: 'Pending',
+      emailStatus: 'Pending',
       meetingDate: '',
       meetingTime: '',
       notes: rawNotes,
-      lastCalled: '',
-      isValidPhone: isValid,
+      lastContacted: '',
+      isValidPhone: isPhoneValid,
+      isValidEmail: isEmailValid,
     });
   });
 
@@ -225,25 +228,26 @@ export function convertRowsToLeads(
 /**
  * Exports leads list to an Excel (.xlsx) file.
  */
-export function exportLeadsToExcel(leads: Lead[], filename: string = 'Outbound_Campaign_Results.xlsx') {
+export function exportLeadsToExcel(leads: Lead[], filename: string = 'OmniReach_WhatsApp_Email_Results.xlsx') {
   const exportData = leads.map((l) => ({
     'Contact Name': l.name,
     'Company': l.company,
-    'Phone Number (E.164)': l.phone,
+    'WhatsApp Phone (E.164)': l.phone,
+    'Email Address': l.email,
+    'Lead Status': l.status,
+    'WhatsApp Status': l.whatsAppStatus,
+    'Email Status': l.emailStatus,
+    'Channel Used': l.channelUsed || 'None',
+    'Meeting Date': l.meetingDate || 'N/A',
+    'Meeting Time': l.meetingTime || 'N/A',
+    'Notes / Remarks': l.notes || '',
+    'Last Contacted At': l.lastContacted || 'Not yet contacted',
     'Original Phone': l.rawPhone || l.phone,
-    'Email': l.email,
-    'Status': l.status,
-    'Call Result': l.callResult,
-    'Meeting Date': l.meetingDate,
-    'Meeting Time': l.meetingTime,
-    'Call Duration (Sec)': l.durationSeconds || 0,
-    'Notes / Summary': l.notes,
-    'Last Called At': l.lastCalled,
   }));
 
   const worksheet = XLSX.utils.json_to_sheet(exportData);
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Call Results');
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Outreach Results');
 
   // Auto-size columns
   const colWidths = Object.keys(exportData[0] || {}).map((key) => ({

@@ -1,28 +1,29 @@
 import React from 'react';
 import {
-  PhoneCall,
+  Send,
   Table,
   Calendar,
   Network,
   BookOpen,
   Settings2,
   Sparkles,
-  CheckCircle2,
-  PlayCircle,
   BarChart3,
   FileSpreadsheet,
   Upload,
+  MessageSquare,
+  Mail,
+  Zap,
 } from 'lucide-react';
 
 export type ActiveTab =
   | 'campaign'
   | 'sheets'
   | 'simulator'
+  | 'templates'
   | 'calendar'
   | 'analytics'
   | 'n8n'
-  | 'architecture'
-  | 'prompt';
+  | 'architecture';
 
 interface HeaderProps {
   activeTab: ActiveTab;
@@ -30,6 +31,7 @@ interface HeaderProps {
   pendingCount: number;
   scheduledCount: number;
   onOpenExcelUpload: () => void;
+  onOpenChannelConfig: () => void;
 }
 
 interface TabItem {
@@ -46,12 +48,13 @@ export const Header: React.FC<HeaderProps> = ({
   pendingCount,
   scheduledCount,
   onOpenExcelUpload,
+  onOpenChannelConfig,
 }) => {
   const tabs: TabItem[] = [
     {
       id: 'campaign',
-      label: 'Automated Auto-Caller',
-      icon: PlayCircle,
+      label: 'Batch Outreach',
+      icon: Send,
       badge: pendingCount > 0 ? `${pendingCount} Ready` : undefined,
       isSpecial: true,
     },
@@ -62,8 +65,13 @@ export const Header: React.FC<HeaderProps> = ({
     },
     {
       id: 'simulator',
-      label: 'Test Simulator',
-      icon: PhoneCall,
+      label: 'Chat & Email Preview',
+      icon: MessageSquare,
+    },
+    {
+      id: 'templates',
+      label: 'AI Copy & Templates',
+      icon: Settings2,
     },
     {
       id: 'calendar',
@@ -78,13 +86,8 @@ export const Header: React.FC<HeaderProps> = ({
     },
     {
       id: 'n8n',
-      label: 'n8n Workflow',
+      label: 'n8n & Webhooks',
       icon: Network,
-    },
-    {
-      id: 'prompt',
-      label: 'AI Script & Pitch',
-      icon: Settings2,
     },
     {
       id: 'architecture',
@@ -97,75 +100,87 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="border-b border-[#E8E4DF] bg-white/95 backdrop-blur sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
-          {/* Logo & Title */}
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#8BA888] flex items-center justify-center shadow-xs text-white">
-              <PhoneCall className="w-5 h-5 text-white" />
+          {/* Logo & Branding */}
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#25D366] via-[#128C7E] to-[#4285F4] flex items-center justify-center text-white shadow-sm ring-2 ring-[#25D366]/20">
+              <Zap className="w-5 h-5 fill-white" />
             </div>
             <div>
-              <div className="flex items-center space-x-2">
-                <h1 className="font-bold text-[#2D2926] tracking-tight text-base sm:text-lg">
-                  AutoDialer <span className="text-[#8BA888] font-normal">AI Platform</span>
-                </h1>
-                <span className="px-2.5 py-0.5 text-xs font-semibold bg-[#8BA888]/15 text-[#537050] border border-[#8BA888]/30 rounded-full flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#8BA888] animate-pulse"></span>
-                  Excel → Auto-Call
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-base text-[#2D2926] tracking-tight">
+                  OmniReach AI
+                </span>
+                <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-[#E8F5E9] text-[#2E7D32] border border-[#C8E6C9] flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#25D366] animate-pulse"></span>
+                  WhatsApp + Email
                 </span>
               </div>
-              <p className="text-xs text-[#8C847C] hidden sm:block">
-                Feed Client Spreadsheets • Automated Voice AI Calls • Google Calendar Booking
+              <p className="text-[11px] text-[#8C847C] hidden sm:block">
+                Excel Spreadsheet Ingestion • AI Personalization • Automated Dispatch
               </p>
             </div>
           </div>
 
-          {/* Quick Actions & Metrics */}
-          <div className="flex items-center space-x-3 text-xs">
+          {/* Quick Action Buttons */}
+          <div className="flex items-center gap-2 sm:gap-3">
             <button
-              onClick={onOpenExcelUpload}
-              className="hidden sm:flex items-center space-x-1.5 px-3.5 py-1.5 rounded-full bg-[#8BA888] hover:bg-[#799676] text-white font-bold transition-all shadow-xs"
+              id="header-channel-config-btn"
+              onClick={onOpenChannelConfig}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg text-[#5D554D] bg-[#F5F2EB] hover:bg-[#EAE5DC] border border-[#DDD6CB] transition-colors"
+              title="Configure WhatsApp & Email API keys"
             >
-              <Upload className="w-3.5 h-3.5" />
-              <span>Feed Excel</span>
+              <Settings2 className="w-3.5 h-3.5 text-[#8C847C]" />
+              <span className="hidden md:inline">Channel Setup</span>
             </button>
 
-            <div className="hidden md:flex items-center space-x-1.5 px-3 py-1.5 rounded-full bg-[#FAF9F6] border border-[#E8E4DF]">
-              <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-              <span className="text-[#8C847C]">Pending:</span>
-              <span className="font-bold text-[#2D2926]">{pendingCount}</span>
-            </div>
-
-            <div className="hidden md:flex items-center space-x-1.5 px-3 py-1.5 rounded-full bg-[#FAF9F6] border border-[#E8E4DF]">
-              <CheckCircle2 className="w-3.5 h-3.5 text-[#8BA888]" />
-              <span className="text-[#8C847C]">Booked:</span>
-              <span className="font-bold text-[#2D2926]">{scheduledCount}</span>
-            </div>
+            <button
+              id="header-import-excel-btn"
+              onClick={onOpenExcelUpload}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg text-white bg-[#2D2926] hover:bg-[#1A1817] shadow-sm transition-all active:scale-[0.98]"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Import Excel / CSV</span>
+            </button>
           </div>
         </div>
 
-        {/* Navigation Tabs */}
-        <nav className="flex space-x-1 sm:space-x-1.5 overflow-x-auto no-scrollbar py-2 -mb-px">
+        {/* Navigation Tabs Bar */}
+        <div className="flex items-center space-x-1 overflow-x-auto no-scrollbar py-2 -mb-px border-t border-[#F0ECE6]">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
+
             return (
               <button
                 key={tab.id}
-                id={`tab-nav-${tab.id}`}
-                onClick={() => setActiveTab(tab.id as ActiveTab)}
-                className={`flex items-center space-x-2 px-3.5 py-2 rounded-full text-xs sm:text-sm font-semibold transition-all whitespace-nowrap ${
+                id={`nav-tab-${tab.id}`}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
                   isActive
-                    ? 'bg-[#8BA888] text-white shadow-xs'
-                    : 'text-[#5C5651] hover:text-[#2D2926] hover:bg-[#F0EDE9]'
+                    ? tab.isSpecial
+                      ? 'bg-[#25D366]/10 text-[#0F5132] font-semibold border border-[#25D366]/30 shadow-xs'
+                      : 'bg-[#2D2926] text-white shadow-xs'
+                    : 'text-[#6C635B] hover:text-[#2D2926] hover:bg-[#F2EFE9]'
                 }`}
               >
-                <Icon className="w-4 h-4" />
+                <Icon
+                  className={`w-3.5 h-3.5 ${
+                    isActive
+                      ? tab.isSpecial
+                        ? 'text-[#128C7E]'
+                        : 'text-white'
+                      : 'text-[#8C847C]'
+                  }`}
+                />
                 <span>{tab.label}</span>
                 {tab.badge && (
                   <span
-                    className={`ml-1 px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-medium ${
                       isActive
-                        ? 'bg-white/25 text-white'
-                        : 'bg-[#E8E4DF] text-[#4A443F]'
+                        ? tab.isSpecial
+                          ? 'bg-[#25D366] text-white'
+                          : 'bg-white/20 text-white'
+                        : 'bg-[#EAE5DC] text-[#5D554D]'
                     }`}
                   >
                     {tab.badge}
@@ -174,7 +189,7 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             );
           })}
-        </nav>
+        </div>
       </div>
     </header>
   );

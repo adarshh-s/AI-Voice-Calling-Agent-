@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -12,20 +12,21 @@ const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
 
-// In-Memory Logs / Webhook Dispatch Records for Production Audit
-interface WebhookDispatchLog {
+// In-Memory Dispatch Logs for Outreach Monitoring & Audit
+interface OutreachDispatchLog {
   id: string;
   leadId: string;
   leadName: string;
-  phone: string;
+  recipient: string;
+  channel: 'whatsapp' | 'email';
+  status: 'sent' | 'delivered' | 'failed';
   timestamp: string;
-  targetUrl: string;
-  status: 'delivered' | 'failed';
-  responseStatus?: number;
-  payload: Record<string, unknown>;
+  subject?: string;
+  preview: string;
+  directUrl?: string;
 }
 
-const dispatchLogs: WebhookDispatchLog[] = [];
+const dispatchLogs: OutreachDispatchLog[] = [];
 
 // Initialize Gemini Client
 let aiClient: GoogleGenAI | null = null;
@@ -47,295 +48,463 @@ function getGenAI(): GoogleGenAI | null {
   return aiClient;
 }
 
-// Function Declarations for AI Voice Agent
-const checkAvailableSlotsTool: FunctionDeclaration = {
-  name: 'check_available_slots',
-  description: 'Query available meeting times from Google Calendar to offer to the client.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      preferredDayOrTime: {
-        type: Type.STRING,
-        description: 'Optional preferred day or time requested by client, e.g. "Tuesday afternoon" or "morning"',
-      },
-    },
-  },
-};
+// Helper: Format fallback templates
+function interpolate(
+  template: string,
+  variables: Record<string, string>
+): string {
+  let res = template;
+  for (const [k, v] of Object.entries(variables)) {
+    res = res.replace(new RegExp(`{{${k}}}`, 'gi'), v || '');
+  }
+  return res;
+}
 
-const bookCalendarMeetingTool: FunctionDeclaration = {
-  name: 'book_calendar_meeting',
-  description: 'Book and confirm a Google Calendar event for the client after they agree to a specific time slot.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      date: {
-        type: Type.STRING,
-        description: 'Selected meeting date in YYYY-MM-DD format (e.g. 2026-09-04)',
-      },
-      time: {
-        type: Type.STRING,
-        description: 'Selected meeting time (e.g. 11:00 AM or 15:00)',
-      },
-      clientName: {
-        type: Type.STRING,
-        description: 'Client full name',
-      },
-      clientEmail: {
-        type: Type.STRING,
-        description: 'Client email address',
-      },
-      meetingNotes: {
-        type: Type.STRING,
-        description: 'Summary of what client wants to discuss in the meeting',
-      },
-    },
-    required: ['date', 'time', 'clientName'],
-  },
-};
-
-const updateCallStatusTool: FunctionDeclaration = {
-  name: 'update_call_status',
-  description: 'Update the client status and call result for the Google Sheet.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      status: {
-        type: Type.STRING,
-        description: 'Status: "Contacted" | "Interested" | "Not Interested" | "No Answer" | "Meeting Scheduled" | "Do Not Contact"',
-      },
-      callResult: {
-        type: Type.STRING,
-        description: 'Short result summary: "Interested", "Not Interested", "Requested Callback", "Do Not Contact", "Busy"',
-      },
-      notes: {
-        type: Type.STRING,
-        description: 'Detailed call notes for Google Sheet',
-      },
-    },
-    required: ['status', 'callResult', 'notes'],
-  },
-};
-
-const endCallTool: FunctionDeclaration = {
-  name: 'end_call',
-  description: 'Politely conclude and hang up the phone call after the conversation is finished.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      reason: {
-        type: Type.STRING,
-        description: 'Reason for ending call, e.g. "meeting_booked", "not_interested", "do_not_contact", "client_busy"',
-      },
-      farewellMessage: {
-        type: Type.STRING,
-        description: 'Spoken parting sentence to the client before hangup',
-      },
-    },
-    required: ['reason', 'farewellMessage'],
-  },
-};
-
-// API Route: AI Call Conversation Turn
-app.post('/api/ai/call-turn', async (req, res) => {
+// API Route: AI-Personalized WhatsApp & Email Generator
+app.post('/api/outreach/generate-message', async (req, res) => {
   try {
-    const {
-      messages,
-      lead,
-      agentSettings,
-      availableSlots,
-    } = req.body;
-
+    const { lead, settings, template, availableSlots } = req.body;
     const ai = getGenAI();
 
-    const clientName = lead?.name || 'Client';
-    const company = lead?.company || 'Company';
-    const callerCompany = agentSettings?.companyName || 'Apex AI Solutions';
-    const offering = agentSettings?.serviceDescription || 'AI-powered workflow automation and customer intelligence solutions';
-    const customPrompt = agentSettings?.customSystemPrompt ? `\nSPECIAL USER INSTRUCTIONS:\n${agentSettings.customSystemPrompt}\n` : '';
+    const firstName = (lead?.name || 'there').split(' ')[0];
+    const companyName = settings?.companyName || 'Apex Growth Systems';
+    const senderName = settings?.senderName || 'Alex Morgan';
+    const senderEmail = settings?.senderEmail || 'alex@apexgrowth.example';
+    const senderPhone = settings?.senderPhone || '+1 (555) 019-2834';
+    const clientCompany = lead?.company || 'your team';
+    const leadNotes = lead?.notes || '';
 
-    const slotsText = (availableSlots || [])
-      .filter((s: { available: boolean }) => s.available)
-      .slice(0, 3)
-      .map((s: { date: string; time: string }) => `${s.date} at ${s.time}`)
-      .join(', ') || 'Thursday at 10:00 AM or Friday at 3:00 PM';
+    const nextSlot = (availableSlots || []).find((s: { available: boolean }) => s.available) || availableSlots?.[0];
+    const bookingLink = nextSlot
+      ? `https://calendar.google.com/booking?date=${nextSlot.date}&slot=${encodeURIComponent(nextSlot.time)}`
+      : 'https://meet.google.com/demo-slot';
 
-    const systemInstruction = `You are ${agentSettings?.agentName || 'Alex'}, an AI voice calling assistant calling on behalf of ${callerCompany}.
-You are on a live phone call with ${clientName} from ${company}.
+    const vars: Record<string, string> = {
+      name: lead?.name || 'there',
+      first_name: firstName,
+      company: clientCompany,
+      email: lead?.email || '',
+      phone: lead?.phone || '',
+      company_name: companyName,
+      sender_name: senderName,
+      sender_email: senderEmail,
+      sender_phone: senderPhone,
+      booking_link: bookingLink,
+    };
 
-CALL OBJECTIVE & BEHAVIOR:
-1. Tone: Friendly, concise, professional, human-like, conversational.
-2. Brevity: Keep every turn strictly to 1-2 short sentences. Never read paragraphs or long sales pitches.
-3. Flow:
-   - If starting: Confirm identity ("Hi, may I speak with ${clientName}?")
-   - After confirmation: Introduce yourself briefly, mention you're calling on behalf of ${callerCompany} regarding ${offering}, and ask if they have a quick minute.
-   - If they say yes: Explain the benefit in one simple sentence and ask if they'd be open to learning more.
-   - If they are busy: Ask if they prefer scheduling a quick 10-minute chat at a more convenient time.
-   - If they are interested: Call 'check_available_slots' or offer available slots (${slotsText}) and schedule a Google Meet.
-   - If they agree to a slot: Call 'book_calendar_meeting' with their chosen date and time, confirm their email (${lead?.email || 'their email'}), and call 'update_call_status'.
-   - If they say "Not interested": Warmly say "Understood, thank you so much for your time. Have a great day!" and call 'end_call'.
-   - If they say "Don't call me again" / "Remove my number": Respectfully say "I understand completely, I will update our records immediately so you won't be contacted again. Have a good day.", call 'update_call_status' with status 'Do Not Contact', and call 'end_call'.
-   - Answer simple questions about ${callerCompany}. If unsure, say our specialist can cover that during the quick demo call.
-${customPrompt}
-Available open Google Calendar slots right now: ${slotsText}.
-`;
+    if (ai) {
+      const prompt = `You are a world-class B2B copywriter specialized in high-converting WhatsApp messages and cold/warm outreach emails.
+Generate a personalized WhatsApp message AND Email for this prospect:
+- Client Name: ${lead?.name}
+- Client Company: ${clientCompany}
+- Client Email: ${lead?.email}
+- Client Phone: ${lead?.phone}
+- Context/Notes from spreadsheet: "${leadNotes}"
+- Sender Company: ${companyName}
+- Sender Name: ${senderName}
+- Offering/Value Prop: ${settings?.serviceDescription || 'Outreach automation synced with Google Calendar and spreadsheets'}
+- Booking Link: ${bookingLink}
+- Custom Instructions: "${settings?.customInstructions || 'Keep it friendly, high-value, crisp, and direct.'}"
+${template ? `- Base Template Guidance:\nWhatsApp Base: ${template.whatsAppContent}\nEmail Subject Base: ${template.emailSubject}\nEmail Body Base: ${template.emailBody}` : ''}
 
-    if (!ai) {
-      // Fallback intelligent responder if API key is not yet set
-      const lastUserMsg = (messages?.[messages.length - 1]?.content || '').toLowerCase();
-      let reply = '';
-      let functionCall: { name: string; args: Record<string, unknown> } | null = null;
+Output strict JSON with these 3 keys:
+{
+  "whatsApp": "A concise, engaging WhatsApp message formatted with natural emojis, bolding (*text*), and the booking link ${bookingLink}",
+  "emailSubject": "High-open rate email subject line (under 60 chars)",
+  "emailBody": "Clear, professional, punchy email with greeting, value prop, bullet points, call to action with booking link, and sender sign-off"
+}`;
 
-      if (!messages || messages.length === 0) {
-        reply = `Hi, may I speak with ${clientName}?`;
-      } else if (lastUserMsg.includes('speaking') || lastUserMsg.includes('yes') || lastUserMsg.includes('this is')) {
-        reply = `Hi ${clientName}, I'm ${agentSettings?.agentName || 'Alex'} calling on behalf of ${callerCompany}. I'll keep this very brief. We're reaching out to see if you'd be interested in learning about our automated AI workflows. Do you have a quick minute?`;
-      } else if (lastUserMsg.includes('busy') || lastUserMsg.includes('can\'t talk') || lastUserMsg.includes('later')) {
-        reply = `No problem at all! Would you prefer that we schedule a quick 10-minute meeting at a more convenient time?`;
-      } else if (lastUserMsg.includes('not interested') || lastUserMsg.includes('no thanks') || lastUserMsg.includes('stop')) {
-        reply = `Understood, thank you for your time. Have a wonderful day!`;
-        functionCall = {
-          name: 'end_call',
-          args: { reason: 'not_interested', farewellMessage: 'Understood, thank you for your time. Have a wonderful day!' },
-        };
-      } else if (lastUserMsg.includes('remove') || lastUserMsg.includes('do not contact')) {
-        reply = `I completely understand. I'm removing your number from our contact list right now. Have a good day.`;
-        functionCall = {
-          name: 'update_call_status',
-          args: { status: 'Do Not Contact', callResult: 'Do Not Contact', notes: 'Client requested removal from call list.' },
-        };
-      } else if (lastUserMsg.includes('sure') || lastUserMsg.includes('interested') || lastUserMsg.includes('tell me more') || lastUserMsg.includes('yes')) {
-        reply = `Great! We have Tuesday at 11 AM or Wednesday at 3 PM available for a quick 15-minute demo. Which works better for you?`;
-      } else if (lastUserMsg.includes('tuesday') || lastUserMsg.includes('wednesday') || lastUserMsg.includes('11') || lastUserMsg.includes('3') || lastUserMsg.includes('thursday') || lastUserMsg.includes('friday')) {
-        reply = `Perfect, I've booked that slot on our calendar and sent the Google Meet link to ${lead?.email || 'your email'}. We look forward to speaking with you!`;
-        functionCall = {
-          name: 'book_calendar_meeting',
-          args: {
-            date: '2026-09-04',
-            time: '11:00 AM',
-            clientName: clientName,
-            clientEmail: lead?.email,
-            meetingNotes: 'Demo call scheduled via AI voice agent',
-          },
-        };
-      } else {
-        reply = `I understand. We help teams automate repetitive workflows with AI. Would you be open to a quick 10-minute overview this week?`;
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.7-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+        },
+      });
+
+      let parsed: { whatsApp?: string; emailSubject?: string; emailBody?: string } = {};
+      try {
+        parsed = JSON.parse(response.text || '{}');
+      } catch {
+        parsed = {};
       }
 
+      if (parsed.whatsApp && parsed.emailSubject && parsed.emailBody) {
+        return res.json({
+          whatsApp: parsed.whatsApp,
+          emailSubject: parsed.emailSubject,
+          emailBody: parsed.emailBody,
+          isAiGenerated: true,
+        });
+      }
+    }
+
+    // Fallback template interpolation
+    if (template) {
       return res.json({
-        reply,
-        functionCall,
-        simulated: true,
+        whatsApp: interpolate(template.whatsAppContent, vars),
+        emailSubject: interpolate(template.emailSubject, vars),
+        emailBody: interpolate(template.emailBody, vars),
+        isAiGenerated: false,
       });
     }
 
-    // Call Gemini 3.7 Flash
-    const contents = (messages || []).map((m: { role: string; content: string }) => ({
-      role: m.role === 'agent' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    }));
-
-    if (contents.length === 0) {
-      contents.push({
-        role: 'user',
-        parts: [{ text: `[System]: The phone just connected. Give the exact opening greeting to ask for ${clientName}.` }],
-      });
-    }
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
-      contents,
-      config: {
-        systemInstruction,
-        temperature: agentSettings?.temperature || 0.2,
-        tools: [
-          {
-            functionDeclarations: [
-              checkAvailableSlotsTool,
-              bookCalendarMeetingTool,
-              updateCallStatusTool,
-              endCallTool,
-            ],
-          },
-        ],
-      },
+    // Standard fallback
+    return res.json({
+      whatsApp: `Hi ${firstName} 👋! Alex from ${companyName} here. We noticed your work at *${clientCompany}* and wanted to share how you can automate client outreach directly from spreadsheets. Open to a 10-min demo? Grab a slot here: ${bookingLink}`,
+      emailSubject: `Automating outreach workflow for ${clientCompany} (10-min Demo)`,
+      emailBody: `Hi ${firstName},\n\nI hope you're having a productive week.\n\nI'm reaching out from ${companyName}. We help teams at ${clientCompany} eliminate manual messaging by connecting spreadsheets directly to automated WhatsApp and Email dispatch.\n\nWould you be open to a brief 10-minute introduction this week?\n\nPick a convenient time here:\n👉 ${bookingLink}\n\nBest regards,\n${senderName}\n${companyName}`,
+      isAiGenerated: false,
     });
-
-    const reply = response.text || '';
-    const functionCalls = response.functionCalls;
-    const firstCall = functionCalls && functionCalls.length > 0 ? functionCalls[0] : null;
-
-    res.json({
-      reply,
-      functionCall: firstCall ? { name: firstCall.name, args: firstCall.args } : null,
-      simulated: false,
-    });
-  } catch (error: unknown) {
-    console.error('Call turn error:', error);
-    const err = error as { message?: string };
-    res.status(500).json({ error: err.message || 'Internal server error processing call turn' });
+  } catch (error) {
+    console.warn('Error in /api/outreach/generate-message:', error);
+    res.status(500).json({ error: 'Failed to generate message' });
   }
 });
 
-// API Route: Post-Call Analysis & Google Sheet Summarizer
-app.post('/api/ai/analyze-call', async (req, res) => {
+// API Route: AI Auto-Reply to Incoming WhatsApp / Email Messages
+app.post('/api/ai/auto-reply', async (req, res) => {
   try {
-    const { transcript, lead } = req.body;
+    const { incomingMessage, lead, settings, availableSlots } = req.body;
     const ai = getGenAI();
 
-    if (!ai || !transcript || transcript.length === 0) {
+    const clientName = lead?.name || 'there';
+    const firstName = clientName.split(' ')[0];
+    const companyName = settings?.companyName || 'Apex Growth Systems';
+    const nextSlot = (availableSlots || []).find((s: { available: boolean }) => s.available) || availableSlots?.[0];
+    const bookingLink = nextSlot
+      ? `https://calendar.google.com/booking?date=${nextSlot.date}&slot=${encodeURIComponent(nextSlot.time)}`
+      : 'https://meet.google.com/demo-slot';
+
+    if (ai && incomingMessage) {
+      const prompt = `A client named ${clientName} at company ${lead?.company || 'their firm'} replied to our outreach with:
+"${incomingMessage}"
+
+Our company: ${companyName}
+Our value prop: ${settings?.serviceDescription || 'AI outreach and calendar booking automation'}
+Booking Link: ${bookingLink}
+
+Generate a concise, helpful, polite, and persuasive response (under 75 words).
+- If they are interested or asking for times: provide the booking link ${bookingLink}.
+- If they ask about pricing or features: answer positively with general context and invite them to the 10-minute demo via ${bookingLink}.
+- If they say not interested or unsubscribe: acknowledge politely and confirm they are opted out.
+
+Return strict JSON:
+{
+  "reply": "The response message text"
+}`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.7-flash',
+        contents: prompt,
+        config: { responseMimeType: 'application/json' },
+      });
+
+      try {
+        const parsed = JSON.parse(response.text || '{}');
+        if (parsed.reply) {
+          return res.json({ reply: parsed.reply });
+        }
+      } catch {}
+    }
+
+    const lower = (incomingMessage || '').toLowerCase();
+    if (lower.includes('price') || lower.includes('cost')) {
       return res.json({
-        status: 'Contacted',
-        callResult: 'Completed conversation',
-        notes: 'Call simulation finished. Client engaged with AI assistant.',
-        meetingScheduled: false,
-        doNotContact: false,
+        reply: `Our pricing scales flexibly with your contact volume. We'd love to show you a quick breakdown for ${lead?.company || 'your team'} on a 10-minute call: ${bookingLink}`,
       });
     }
 
-    const prompt = `Analyze this voice call transcript between an AI sales agent and a lead (${lead?.name}, ${lead?.company}):
-${JSON.stringify(transcript, null, 2)}
-
-Return a strict JSON object with:
-- "status": One of ["Meeting Scheduled", "Interested", "Not Interested", "No Answer", "Do Not Contact", "Contacted"]
-- "callResult": A 2-4 word summary (e.g. "Meeting Booked", "Declined - Not Interested", "Follow-up Requested", "Do Not Contact")
-- "notes": 1-2 clear summary sentences of the outcome and next steps
-- "meetingScheduled": boolean
-- "meetingDate": string (YYYY-MM-DD if scheduled, else null)
-- "meetingTime": string (e.g. "11:00 AM" if scheduled, else null)
-- "doNotContact": boolean
-`;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
-    });
-
-    let result = {};
-    try {
-      result = JSON.parse(response.text || '{}');
-    } catch {
-      result = {
-        status: 'Contacted',
-        callResult: 'Call Completed',
-        notes: 'AI voice agent completed conversation.',
-        meetingScheduled: false,
-      };
+    if (lower.includes('yes') || lower.includes('sure') || lower.includes('demo') || lower.includes('link')) {
+      return res.json({
+        reply: `Awesome, ${firstName}! You can choose any open time that fits your calendar here: ${bookingLink}. Looking forward to connecting!`,
+      });
     }
 
-    res.json(result);
-  } catch (err: unknown) {
-    console.error('Analysis error:', err);
-    res.status(500).json({ error: 'Failed to analyze call' });
+    return res.json({
+      reply: `Thanks for the response, ${firstName}! Would Thursday at 11:00 AM or Friday at 3:00 PM work for a quick walk-through? Or pick any time here: ${bookingLink}`,
+    });
+  } catch (err) {
+    console.error('Error in /api/ai/auto-reply:', err);
+    res.status(500).json({ error: 'Failed to generate auto-reply' });
+  }
+});
+
+// API Route: WhatsApp Dispatch Endpoint
+app.post('/api/outreach/send-whatsapp', async (req, res) => {
+  try {
+    const { lead, messageText, channelSettings, webhookUrl } = req.body;
+
+    const phoneDigits = (lead?.phone || '').replace(/\D/g, '');
+    const directUrl = `https://wa.me/${phoneDigits}?text=${encodeURIComponent(messageText || '')}`;
+
+    let delivered = false;
+    let providerResponse: any = null;
+    let errorDetail: string | null = null;
+
+    const provider = channelSettings?.whatsAppProvider || 'web_direct';
+
+    // 1. Twilio WhatsApp API
+    if (provider === 'twilio' && channelSettings?.twilioAccountSid && channelSettings?.twilioAuthToken) {
+      try {
+        const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${channelSettings.twilioAccountSid}/Messages.json`;
+        const fromNumber = channelSettings.twilioFromNumber || '+14155238886'; // default Twilio sandbox number
+        const formattedFrom = fromNumber.startsWith('whatsapp:') ? fromNumber : `whatsapp:${fromNumber}`;
+        const formattedTo = `whatsapp:+${phoneDigits}`;
+
+        const formData = new URLSearchParams();
+        formData.append('From', formattedFrom);
+        formData.append('To', formattedTo);
+        formData.append('Body', messageText || '');
+
+        const authHeader = `Basic ${Buffer.from(`${channelSettings.twilioAccountSid}:${channelSettings.twilioAuthToken}`).toString('base64')}`;
+
+        const twilioRes = await fetch(twilioUrl, {
+          method: 'POST',
+          headers: {
+            Authorization: authHeader,
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: formData.toString(),
+        });
+
+        const twilioData = await twilioRes.json();
+        if (twilioRes.ok) {
+          delivered = true;
+          providerResponse = { provider: 'twilio', sid: twilioData.sid, status: twilioData.status };
+        } else {
+          errorDetail = twilioData.message || 'Twilio API returned an error';
+          providerResponse = twilioData;
+        }
+      } catch (err: any) {
+        errorDetail = err.message || 'Failed connecting to Twilio';
+      }
+    }
+    // 2. Meta WhatsApp Cloud API
+    else if (provider === 'cloud_api' && channelSettings?.whatsappCloudApiKey && channelSettings?.whatsappCloudPhoneId) {
+      try {
+        const metaUrl = `https://graph.facebook.com/v21.0/${channelSettings.whatsappCloudPhoneId}/messages`;
+        const metaRes = await fetch(metaUrl, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${channelSettings.whatsappCloudApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to: phoneDigits,
+            type: 'text',
+            text: { preview_url: true, body: messageText },
+          }),
+        });
+
+        const metaData = await metaRes.json();
+        if (metaRes.ok && metaData.messages?.[0]?.id) {
+          delivered = true;
+          providerResponse = { provider: 'meta_cloud_api', messageId: metaData.messages[0].id };
+        } else {
+          errorDetail = metaData.error?.message || 'Meta Cloud API error';
+          providerResponse = metaData;
+        }
+      } catch (err: any) {
+        errorDetail = err.message || 'Failed connecting to Meta Cloud API';
+      }
+    } else {
+      // Default Web / Direct mode
+      delivered = true;
+    }
+
+    // 3. Optional n8n / Custom Webhook Trigger
+    const activeWebhook = webhookUrl || channelSettings?.n8nWebhookUrl;
+    if (activeWebhook) {
+      try {
+        const payload = {
+          event: 'whatsapp_outreach_dispatch',
+          timestamp: new Date().toISOString(),
+          provider,
+          lead,
+          messageText,
+          directUrl,
+          delivered,
+        };
+        await fetch(activeWebhook, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      } catch (e) {
+        console.warn('External webhook notification failed:', e);
+      }
+    }
+
+    const logEntry: OutreachDispatchLog = {
+      id: `wa-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      leadId: lead?.id || 'lead',
+      leadName: lead?.name || 'Contact',
+      recipient: lead?.phone || '',
+      channel: 'whatsapp',
+      status: delivered ? 'delivered' : 'failed',
+      timestamp: new Date().toISOString(),
+      preview: (messageText || '').substring(0, 90) + '...',
+      directUrl,
+    };
+
+    dispatchLogs.unshift(logEntry);
+    if (dispatchLogs.length > 100) dispatchLogs.pop();
+
+    res.json({
+      success: true,
+      delivered,
+      provider,
+      providerResponse,
+      errorDetail,
+      directUrl,
+      log: logEntry,
+    });
+  } catch (error: any) {
+    console.error('WhatsApp send error:', error);
+    res.status(500).json({ error: error.message || 'Failed to dispatch WhatsApp message' });
+  }
+});
+
+// API Route: Email Dispatch Endpoint
+app.post('/api/outreach/send-email', async (req, res) => {
+  try {
+    const { lead, subject, body, channelSettings, webhookUrl, senderName, senderEmail } = req.body;
+
+    const mailtoUrl = `mailto:${lead?.email || ''}?subject=${encodeURIComponent(subject || '')}&body=${encodeURIComponent(body || '')}`;
+
+    let delivered = false;
+    let providerResponse: any = null;
+    let errorDetail: string | null = null;
+
+    const provider = channelSettings?.emailProvider || 'mailto_direct';
+    const fromName = senderName || 'OmniReach AI';
+    const fromAddress = senderEmail || 'onboarding@resend.dev';
+
+    // 1. Resend API
+    if (provider === 'resend' && channelSettings?.emailApiKey) {
+      try {
+        const resendRes = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${channelSettings.emailApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: `${fromName} <${fromAddress}>`,
+            to: [lead?.email],
+            subject: subject || 'Meeting Request',
+            text: body || '',
+            html: (body || '').replace(/\n/g, '<br/>'),
+          }),
+        });
+
+        const resendData = await resendRes.json();
+        if (resendRes.ok && resendData.id) {
+          delivered = true;
+          providerResponse = { provider: 'resend', id: resendData.id };
+        } else {
+          errorDetail = resendData.message || 'Resend API returned an error';
+          providerResponse = resendData;
+        }
+      } catch (err: any) {
+        errorDetail = err.message || 'Failed connecting to Resend';
+      }
+    }
+    // 2. SendGrid API
+    else if (provider === 'sendgrid' && channelSettings?.emailApiKey) {
+      try {
+        const sgRes = await fetch('https://api.sendgrid.com/v3/mail/send', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${channelSettings.emailApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            personalizations: [{ to: [{ email: lead?.email, name: lead?.name }] }],
+            from: { email: fromAddress, name: fromName },
+            subject: subject || 'Meeting Request',
+            content: [{ type: 'text/plain', value: body || '' }],
+          }),
+        });
+
+        if (sgRes.status === 202 || sgRes.ok) {
+          delivered = true;
+          providerResponse = { provider: 'sendgrid', status: 'queued_accepted' };
+        } else {
+          const sgData = await sgRes.json().catch(() => ({}));
+          errorDetail = sgData.errors?.[0]?.message || 'SendGrid API returned an error';
+          providerResponse = sgData;
+        }
+      } catch (err: any) {
+        errorDetail = err.message || 'Failed connecting to SendGrid';
+      }
+    } else {
+      // Default direct mailto mode
+      delivered = true;
+    }
+
+    // 3. Optional n8n / Custom Webhook Trigger
+    const activeWebhook = webhookUrl || channelSettings?.n8nWebhookUrl;
+    if (activeWebhook) {
+      try {
+        const payload = {
+          event: 'email_outreach_dispatch',
+          timestamp: new Date().toISOString(),
+          provider,
+          lead,
+          subject,
+          body,
+          mailtoUrl,
+          delivered,
+        };
+        await fetch(activeWebhook, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      } catch (e) {
+        console.warn('External email webhook notification failed:', e);
+      }
+    }
+
+    const logEntry: OutreachDispatchLog = {
+      id: `em-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      leadId: lead?.id || 'lead',
+      leadName: lead?.name || 'Contact',
+      recipient: lead?.email || '',
+      channel: 'email',
+      status: delivered ? 'delivered' : 'failed',
+      timestamp: new Date().toISOString(),
+      subject,
+      preview: (body || '').substring(0, 90) + '...',
+      directUrl: mailtoUrl,
+    };
+
+    dispatchLogs.unshift(logEntry);
+    if (dispatchLogs.length > 100) dispatchLogs.pop();
+
+    res.json({
+      success: true,
+      delivered,
+      provider,
+      providerResponse,
+      errorDetail,
+      mailtoUrl,
+      log: logEntry,
+    });
+  } catch (error: any) {
+    console.error('Email send error:', error);
+    res.status(500).json({ error: error.message || 'Failed to dispatch Email' });
   }
 });
 
 // API Route: Calendar Booking & Google Meet Link Generator
 app.post('/api/calendar/book', async (req, res) => {
   try {
-    const { slotId, date, time, lead, meetingNotes } = req.body;
+    const { slotId, date, time, lead } = req.body;
     const meetCode = `${Math.random().toString(36).substring(2, 5)}-${Math.random().toString(36).substring(2, 6)}-${Math.random().toString(36).substring(2, 5)}`;
     const meetLink = `https://meet.google.com/${meetCode}`;
 
@@ -355,66 +524,8 @@ app.post('/api/calendar/book', async (req, res) => {
   }
 });
 
-// API Route: Webhook Dispatcher (n8n / CRM / Custom HTTP)
-app.post('/api/telephony/dispatch-webhook', async (req, res) => {
-  try {
-    const { webhookUrl, lead, event, details } = req.body;
-
-    if (!webhookUrl) {
-      return res.status(400).json({ error: 'webhookUrl is required' });
-    }
-
-    const payload = {
-      event: event || 'lead_call_trigger',
-      timestamp: new Date().toISOString(),
-      lead,
-      details: details || {},
-    };
-
-    let delivered = false;
-    let responseStatus = 200;
-
-    try {
-      const response = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      responseStatus = response.status;
-      delivered = response.ok;
-    } catch (e) {
-      delivered = false;
-      responseStatus = 500;
-    }
-
-    const logEntry: WebhookDispatchLog = {
-      id: `disp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      leadId: lead?.id || 'unknown',
-      leadName: lead?.name || 'Lead',
-      phone: lead?.phone || '',
-      timestamp: new Date().toISOString(),
-      targetUrl: webhookUrl,
-      status: delivered ? 'delivered' : 'failed',
-      responseStatus,
-      payload,
-    };
-
-    dispatchLogs.unshift(logEntry);
-    if (dispatchLogs.length > 50) dispatchLogs.pop();
-
-    res.json({
-      success: delivered,
-      status: responseStatus,
-      logEntry,
-    });
-  } catch (error: unknown) {
-    const err = error as { message?: string };
-    res.status(500).json({ error: err.message || 'Failed to dispatch webhook' });
-  }
-});
-
-// API Route: Get Webhook Dispatch Logs
-app.get('/api/telephony/dispatch-logs', (req, res) => {
+// API Route: Get Outreach Dispatch Logs
+app.get('/api/outreach/logs', (req, res) => {
   res.json({ logs: dispatchLogs });
 });
 
@@ -423,6 +534,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     geminiConfigured: !!process.env.GEMINI_API_KEY,
+    mode: 'whatsapp_email_outreach',
     timestamp: new Date().toISOString(),
   });
 });

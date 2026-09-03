@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import {
   Table,
   Plus,
-  Phone,
-  Play,
+  Send,
+  MessageSquare,
+  Mail,
   Download,
   RotateCcw,
   Search,
@@ -20,9 +21,11 @@ import {
   Layers,
   CheckSquare,
   Square,
+  Clock,
 } from 'lucide-react';
-import { Lead, LeadStatus } from '../types';
+import { Lead, LeadStatus, ChannelDeliveryStatus } from '../types';
 import { exportLeadsToExcel } from '../utils/excelParser';
+import { generateWhatsAppLink, generateMailtoLink } from '../utils/outreachEngine';
 
 interface SheetsViewProps {
   leads: Lead[];
@@ -30,7 +33,7 @@ interface SheetsViewProps {
   onUpdateLead: (lead: Lead) => void;
   onDeleteLead: (id: string) => void;
   onResetLeads: () => void;
-  onTriggerCall: (leadId: string) => void;
+  onSelectLeadForSimulator: (leadId: string) => void;
   onOpenExcelUpload: () => void;
   onStartCampaignWithSelected?: (selectedIds: string[]) => void;
 }
@@ -41,12 +44,13 @@ export const SheetsView: React.FC<SheetsViewProps> = ({
   onUpdateLead,
   onDeleteLead,
   onResetLeads,
-  onTriggerCall,
+  onSelectLeadForSimulator,
   onOpenExcelUpload,
   onStartCampaignWithSelected,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
+  const [filterChannel, setFilterChannel] = useState<string>('ALL');
   const [isAddingLead, setIsAddingLead] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
@@ -57,30 +61,33 @@ export const SheetsView: React.FC<SheetsViewProps> = ({
     company: '',
     phone: '',
     email: '',
+    notes: '',
   });
 
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newLead.name || !newLead.phone) return;
+    if (!newLead.name) return;
 
     const lead: Lead = {
       id: `lead-${Date.now()}`,
       name: newLead.name,
       company: newLead.company || 'Prospective Client',
-      phone: newLead.phone.startsWith('+') ? newLead.phone : `+91${newLead.phone.replace(/\D/g, '')}`,
+      phone: newLead.phone.startsWith('+')
+        ? newLead.phone
+        : `+91${newLead.phone.replace(/\D/g, '')}`,
       rawPhone: newLead.phone,
       email: newLead.email,
       status: 'Pending',
-      callResult: '',
-      meetingDate: '',
-      meetingTime: '',
-      notes: '',
-      lastCalled: '',
-      isValidPhone: true,
+      whatsAppStatus: 'Pending',
+      emailStatus: 'Pending',
+      notes: newLead.notes || '',
+      lastContacted: '',
+      isValidPhone: Boolean(newLead.phone && newLead.phone.length >= 7),
+      isValidEmail: Boolean(newLead.email && newLead.email.includes('@')),
     };
 
     onAddLead(lead);
-    setNewLead({ name: '', company: '', phone: '', email: '' });
+    setNewLead({ name: '', company: '', phone: '', email: '', notes: '' });
     setIsAddingLead(false);
   };
 
@@ -100,528 +107,572 @@ export const SheetsView: React.FC<SheetsViewProps> = ({
   };
 
   const toggleSelectLead = (id: string) => {
-    if (selectedIds.includes(id)) {
-      setSelectedIds(selectedIds.filter((item) => item !== id));
-    } else {
-      setSelectedIds([...selectedIds, id]);
-    }
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
   };
 
-  const filteredLeads = leads.filter((lead) => {
-    const matchesSearch =
-      lead.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      lead.company.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      lead.phone.includes(searchTerm) ||
-      lead.email.toLowerCase().includes(searchTerm.toLowerCase());
+  // Direct single actions
+  const handleQuickWhatsApp = (lead: Lead) => {
+    const text = lead.whatsAppMessage || `Hi ${lead.name.split(' ')[0]}! Reaching out from Apex Growth regarding our demo. Let me know if you'd like a quick overview!`;
+    const url = generateWhatsAppLink(lead.phone, text);
+    window.open(url, '_blank');
 
-    const matchesStatus = filterStatus === 'ALL' || lead.status === filterStatus;
-    return matchesSearch && matchesStatus;
+    onUpdateLead({
+      ...lead,
+      status: 'Contacted',
+      whatsAppStatus: 'Delivered',
+      channelUsed: 'whatsapp',
+      lastContacted: new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+    });
+  };
+
+  const handleQuickEmail = (lead: Lead) => {
+    const subject = lead.emailSubject || `Introduction & 10-min Demo for ${lead.company}`;
+    const body = lead.emailBody || `Hi ${lead.name.split(' ')[0]},\n\nI hope you're doing well.\n\nI'm reaching out regarding automated client outreach solutions for ${lead.company}.\n\nBest,\nAlex`;
+    const url = generateMailtoLink(lead.email, subject, body);
+    window.open(url, '_blank');
+
+    onUpdateLead({
+      ...lead,
+      status: 'Contacted',
+      emailStatus: 'Sent',
+      channelUsed: 'email',
+      lastContacted: new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+    });
+  };
+
+  const filteredLeads = leads.filter((l) => {
+    const matchesSearch =
+      l.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      l.company.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      l.phone.includes(searchTerm) ||
+      l.email.toLowerCase().includes(searchTerm.toLowerCase());
+
+    const matchesStatus =
+      filterStatus === 'ALL' ||
+      (filterStatus === 'PENDING' && l.status === 'Pending') ||
+      (filterStatus === 'CONTACTED' && (l.status === 'Contacted' || l.status === 'Interested')) ||
+      (filterStatus === 'BOOKED' && l.status === 'Meeting Scheduled');
+
+    const matchesChannel =
+      filterChannel === 'ALL' ||
+      (filterChannel === 'WA_SENT' && l.whatsAppStatus !== 'Pending') ||
+      (filterChannel === 'EMAIL_SENT' && l.emailStatus !== 'Pending') ||
+      (filterChannel === 'REPLIED' && (l.whatsAppStatus === 'Replied' || l.emailStatus === 'Replied'));
+
+    return matchesSearch && matchesStatus && matchesChannel;
   });
 
-  const pendingCount = leads.filter((l) => l.status === 'Pending').length;
-  const scheduledCount = leads.filter((l) => l.status === 'Meeting Scheduled').length;
-  const invalidCount = leads.filter((l) => !l.isValidPhone || l.status === 'Invalid Number').length;
-
-  const handleExportExcel = () => {
-    exportLeadsToExcel(leads, `Outbound_Campaign_Leads_${new Date().toISOString().slice(0, 10)}.xlsx`);
-  };
-
-  const getStatusBadge = (status: LeadStatus) => {
-    switch (status) {
-      case 'Meeting Scheduled':
-        return 'bg-[#8BA888]/15 text-[#537050] border-[#8BA888]/30';
-      case 'Pending':
-        return 'bg-amber-50 text-amber-800 border-amber-200';
-      case 'In Progress':
-        return 'bg-blue-50 text-blue-800 border-blue-200 animate-pulse';
-      case 'Interested':
-        return 'bg-emerald-50 text-emerald-800 border-emerald-200';
-      case 'Contacted':
-        return 'bg-[#F0EDE9] text-[#5C5651] border-[#E8E4DF]';
-      case 'Not Interested':
-        return 'bg-rose-50 text-rose-800 border-rose-200';
-      case 'Do Not Contact':
-        return 'bg-red-50 text-red-800 border-red-200';
-      case 'Invalid Number':
-        return 'bg-rose-100 text-rose-800 border-rose-200';
-      case 'No Answer':
-        return 'bg-orange-50 text-orange-800 border-orange-200';
-      default:
-        return 'bg-[#FAF9F6] text-[#8C847C] border-[#E8E4DF]';
-    }
-  };
-
   return (
-    <div className="space-y-6">
-      {/* Top Controls Banner */}
-      <div className="bg-white border border-[#E8E4DF] rounded-[28px] p-6 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center space-x-2 text-xs font-semibold uppercase tracking-wider text-[#8C847C] mb-1">
-            <FileSpreadsheet className="w-3.5 h-3.5 text-[#8BA888]" />
-            <span>Client Spreadsheet & Database Ingestion</span>
+    <div className="space-y-5">
+      {/* Top Toolbar */}
+      <div className="bg-white rounded-2xl border border-[#E8E4DF] p-4 sm:p-5 shadow-xs">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-bold text-[#2D2926]">
+                Client Outreach Spreadsheet & Lead Records
+              </h2>
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-[#FAF8F5] border border-[#DDD6CB] text-[#6C635B]">
+                {leads.length} Total Rows
+              </span>
+            </div>
+            <p className="text-xs text-[#7A7269] mt-0.5">
+              Live two-way synced contact records. Ingest Excel sheets, monitor WhatsApp & Email delivery status, and launch targeted sequences.
+            </p>
           </div>
-          <h2 className="text-xl font-bold text-[#2D2926]">Client Calling Registry</h2>
-          <p className="text-xs sm:text-sm text-[#5C5651] mt-0.5">
-            Feed an Excel spreadsheet (<code className="text-[#537050] font-mono">.xlsx, .xls, .csv</code>) to automatically normalize phone numbers and initiate automated AI calling batches.
-          </p>
+
+          {/* Action Buttons */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              id="sheet-add-lead-btn"
+              onClick={() => setIsAddingLead(!isAddingLead)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-[#FAF8F5] hover:bg-[#F2EFE9] border border-[#DDD6CB] text-[#2D2926] transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add Lead</span>
+            </button>
+
+            <button
+              id="sheet-import-excel-btn"
+              onClick={onOpenExcelUpload}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-[#FAF8F5] hover:bg-[#F2EFE9] border border-[#DDD6CB] text-[#2D2926] transition-colors"
+            >
+              <Upload className="w-3.5 h-3.5 text-[#8C847C]" />
+              <span>Import Sheet</span>
+            </button>
+
+            <button
+              id="sheet-export-excel-btn"
+              onClick={() => exportLeadsToExcel(leads)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-[#FAF8F5] hover:bg-[#F2EFE9] border border-[#DDD6CB] text-[#2D2926] transition-colors"
+            >
+              <Download className="w-3.5 h-3.5 text-[#8C847C]" />
+              <span>Export Excel</span>
+            </button>
+
+            <button
+              id="sheet-reset-btn"
+              onClick={onResetLeads}
+              className="p-2 text-xs font-semibold rounded-lg text-[#8C847C] hover:text-[#2D2926] hover:bg-[#F2EFE9] border border-[#DDD6CB] transition-colors"
+              title="Reset to initial sample leads"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          <button
-            id="btn-upload-excel-top"
-            onClick={onOpenExcelUpload}
-            className="flex items-center space-x-1.5 px-4 py-2 rounded-full bg-[#8BA888] hover:bg-[#799676] text-white font-bold text-xs shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98]"
-          >
-            <Upload className="w-3.5 h-3.5" />
-            <span>Feed Excel / CSV</span>
-          </button>
+        {/* Filters & Search Row */}
+        <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 mt-4 pt-4 border-t border-[#F0ECE6]">
+          {/* Search Box */}
+          <div className="sm:col-span-6 relative">
+            <Search className="w-4 h-4 text-[#8C847C] absolute left-3 top-2.5" />
+            <input
+              id="sheet-search-input"
+              type="text"
+              placeholder="Search by name, company, phone, or email..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-[#FAF8F5] border border-[#DDD6CB] rounded-lg pl-9 pr-3 py-2 text-xs text-[#2D2926] placeholder-[#A69F96] focus:ring-1 focus:ring-[#25D366] focus:border-[#25D366]"
+            />
+          </div>
 
-          <button
-            id="btn-export-excel"
-            onClick={handleExportExcel}
-            className="flex items-center space-x-1.5 px-4 py-2 rounded-full bg-[#FAF9F6] hover:bg-[#F0EDE9] border border-[#E8E4DF] text-[#4A443F] font-semibold text-xs transition-all"
-          >
-            <Download className="w-3.5 h-3.5 text-[#8BA888]" />
-            <span>Export .XLSX</span>
-          </button>
+          {/* Status Filter */}
+          <div className="sm:col-span-3">
+            <select
+              id="sheet-status-filter"
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="w-full bg-[#FAF8F5] border border-[#DDD6CB] rounded-lg px-3 py-2 text-xs text-[#2D2926]"
+            >
+              <option value="ALL">All Lead Statuses</option>
+              <option value="PENDING">Pending Outreach</option>
+              <option value="CONTACTED">Contacted / Interested</option>
+              <option value="BOOKED">Meeting Booked</option>
+            </select>
+          </div>
 
-          <button
-            id="btn-add-client-manual"
-            onClick={() => setIsAddingLead(!isAddingLead)}
-            className="flex items-center space-x-1.5 px-3.5 py-2 rounded-full bg-[#FAF9F6] hover:bg-[#F0EDE9] border border-[#E8E4DF] text-[#4A443F] font-semibold text-xs transition-all"
-          >
-            <Plus className="w-3.5 h-3.5 text-[#8C847C]" />
-            <span>Add Single Lead</span>
-          </button>
-
-          <button
-            id="btn-reset-leads-default"
-            onClick={onResetLeads}
-            title="Reset to clean demo data"
-            className="p-2 rounded-full bg-[#FAF9F6] hover:bg-[#F0EDE9] border border-[#E8E4DF] text-[#8C847C] hover:text-[#2D2926] text-xs transition-all"
-          >
-            <RotateCcw className="w-4 h-4" />
-          </button>
+          {/* Channel Status Filter */}
+          <div className="sm:col-span-3">
+            <select
+              id="sheet-channel-filter"
+              value={filterChannel}
+              onChange={(e) => setFilterChannel(e.target.value)}
+              className="w-full bg-[#FAF8F5] border border-[#DDD6CB] rounded-lg px-3 py-2 text-xs text-[#2D2926]"
+            >
+              <option value="ALL">All Delivery Statuses</option>
+              <option value="WA_SENT">WhatsApp Delivered</option>
+              <option value="EMAIL_SENT">Email Sent</option>
+              <option value="REPLIED">Client Replied</option>
+            </select>
+          </div>
         </div>
+
+        {/* Batch Selected Actions Bar */}
+        {selectedIds.length > 0 && (
+          <div className="mt-3 p-2.5 bg-[#E8F5E9] border border-[#C8E6C9] rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
+            <span className="font-semibold text-[#128C7E]">
+              {selectedIds.length} leads selected
+            </span>
+            <div className="flex items-center gap-2">
+              {onStartCampaignWithSelected && (
+                <button
+                  onClick={() => onStartCampaignWithSelected(selectedIds)}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#25D366] text-white font-semibold text-xs shadow-xs hover:bg-[#1EBE5D]"
+                >
+                  <Send className="w-3 h-3" />
+                  <span>Launch Sequence for Selected</span>
+                </button>
+              )}
+              <button
+                onClick={() => setSelectedIds([])}
+                className="px-2.5 py-1.5 rounded-lg bg-white text-[#5D554D] font-medium text-xs hover:bg-[#F2EFE9] border border-[#C8E6C9]"
+              >
+                Clear Selection
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Quick Summary Metrics Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
-        <div className="p-4 rounded-2xl bg-white border border-[#E8E4DF] shadow-xs">
-          <p className="text-[10px] uppercase font-bold text-[#8C847C] tracking-wider">TOTAL CLIENTS</p>
-          <p className="text-xl font-bold text-[#2D2926] mt-0.5">{leads.length}</p>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-white border border-[#E8E4DF] shadow-xs">
-          <p className="text-[10px] uppercase font-bold text-amber-700 tracking-wider">PENDING CALLS</p>
-          <p className="text-xl font-bold text-amber-800 mt-0.5">{pendingCount}</p>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-white border border-[#E8E4DF] shadow-xs">
-          <p className="text-[10px] uppercase font-bold text-[#537050] tracking-wider">MEETINGS BOOKED</p>
-          <p className="text-xl font-bold text-[#537050] mt-0.5">{scheduledCount}</p>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-white border border-[#E8E4DF] shadow-xs">
-          <p className="text-[10px] uppercase font-bold text-rose-700 tracking-wider">INVALID / SKIPPED</p>
-          <p className="text-xl font-bold text-rose-700 mt-0.5">{invalidCount}</p>
-        </div>
-      </div>
-
-      {/* Add Lead Form (Collapsible) */}
+      {/* Inline Add Lead Form */}
       {isAddingLead && (
         <form
           onSubmit={handleAddSubmit}
-          className="bg-white border border-[#8BA888]/50 rounded-[28px] p-6 shadow-sm space-y-4 animate-in fade-in"
+          className="bg-white rounded-2xl border border-[#25D366]/40 p-5 shadow-sm space-y-4"
         >
-          <div className="flex items-center justify-between pb-3 border-b border-[#E8E4DF]">
-            <h3 className="font-bold text-sm text-[#2D2926] flex items-center gap-2">
-              <Plus className="w-4 h-4 text-[#8BA888]" />
-              Add Single Client to Spreadsheet
-            </h3>
-            <span className="text-xs text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200 font-semibold">
-              Initial Status: Pending
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-[#4A443F] mb-1">Full Name *</label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. Alex Morgan"
-                value={newLead.name}
-                onChange={(e) => setNewLead({ ...newLead, name: e.target.value })}
-                className="w-full bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl px-3 py-2 text-xs text-[#2D2926] placeholder-[#8C847C] focus:outline-none focus:ring-2 focus:ring-[#8BA888]/30"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-[#4A443F] mb-1">Company</label>
-              <input
-                type="text"
-                placeholder="e.g. Acme Tech"
-                value={newLead.company}
-                onChange={(e) => setNewLead({ ...newLead, company: e.target.value })}
-                className="w-full bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl px-3 py-2 text-xs text-[#2D2926] placeholder-[#8C847C] focus:outline-none focus:ring-2 focus:ring-[#8BA888]/30"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-[#4A443F] mb-1">Phone Number *</label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. +919876543210 or 9876543210"
-                value={newLead.phone}
-                onChange={(e) => setNewLead({ ...newLead, phone: e.target.value })}
-                className="w-full bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl px-3 py-2 text-xs text-[#2D2926] placeholder-[#8C847C] focus:outline-none focus:ring-2 focus:ring-[#8BA888]/30"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-[#4A443F] mb-1">Email</label>
-              <input
-                type="email"
-                placeholder="e.g. alex.m@company.com"
-                value={newLead.email}
-                onChange={(e) => setNewLead({ ...newLead, email: e.target.value })}
-                className="w-full bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl px-3 py-2 text-xs text-[#2D2926] placeholder-[#8C847C] focus:outline-none focus:ring-2 focus:ring-[#8BA888]/30"
-              />
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-2">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold text-[#2D2926]">Add New Client Contact</h3>
             <button
               type="button"
               onClick={() => setIsAddingLead(false)}
-              className="px-4 py-2 rounded-full bg-[#FAF9F6] border border-[#E8E4DF] text-[#5C5651] text-xs font-semibold hover:bg-[#F0EDE9] transition-all"
+              className="text-xs text-[#8C847C] hover:text-[#2D2926]"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-[11px] font-semibold text-[#8C847C] mb-1">
+                Full Name *
+              </label>
+              <input
+                required
+                type="text"
+                placeholder="e.g. John Doe"
+                value={newLead.name}
+                onChange={(e) => setNewLead({ ...newLead, name: e.target.value })}
+                className="w-full bg-[#FAF8F5] border border-[#DDD6CB] rounded-lg px-3 py-1.5 text-xs text-[#2D2926]"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-[#8C847C] mb-1">
+                Company Name
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Acme Corp"
+                value={newLead.company}
+                onChange={(e) => setNewLead({ ...newLead, company: e.target.value })}
+                className="w-full bg-[#FAF8F5] border border-[#DDD6CB] rounded-lg px-3 py-1.5 text-xs text-[#2D2926]"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-[#8C847C] mb-1">
+                WhatsApp Phone (E.164) *
+              </label>
+              <input
+                required
+                type="text"
+                placeholder="e.g. +919876543210"
+                value={newLead.phone}
+                onChange={(e) => setNewLead({ ...newLead, phone: e.target.value })}
+                className="w-full bg-[#FAF8F5] border border-[#DDD6CB] rounded-lg px-3 py-1.5 text-xs text-[#2D2926]"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-[#8C847C] mb-1">
+                Email Address
+              </label>
+              <input
+                type="email"
+                placeholder="e.g. john@acme.com"
+                value={newLead.email}
+                onChange={(e) => setNewLead({ ...newLead, email: e.target.value })}
+                className="w-full bg-[#FAF8F5] border border-[#DDD6CB] rounded-lg px-3 py-1.5 text-xs text-[#2D2926]"
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setIsAddingLead(false)}
+              className="px-3 py-1.5 text-xs text-[#6C635B] hover:bg-[#FAF8F5] rounded-lg border border-[#DDD6CB]"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-full bg-[#8BA888] text-white text-xs font-bold hover:bg-[#799676] shadow-sm transition-all"
+              className="px-4 py-1.5 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#1EBE5D] rounded-lg shadow-xs"
             >
-              Save to Spreadsheet
+              Save Contact
             </button>
           </div>
         </form>
       )}
 
-      {/* Edit Lead Modal */}
+      {/* Edit Lead Modal / Form */}
       {editingLead && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#2D2926]/40 backdrop-blur-xs">
-          <div className="bg-white border border-[#E8E4DF] rounded-[28px] max-w-lg w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-[#E8E4DF]">
-              <h3 className="font-bold text-sm text-[#2D2926] flex items-center gap-2">
-                <Edit2 className="w-4 h-4 text-[#8BA888]" />
-                Edit Lead Details: {editingLead.name}
-              </h3>
-              <button
-                onClick={() => setEditingLead(null)}
-                className="text-xs text-[#8C847C] hover:text-[#2D2926]"
-              >
-                Close
-              </button>
+        <form
+          onSubmit={handleEditSubmit}
+          className="bg-white rounded-2xl border border-[#4285F4]/40 p-5 shadow-sm space-y-4"
+        >
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold text-[#2D2926]">Edit Lead: {editingLead.name}</h3>
+            <button
+              type="button"
+              onClick={() => setEditingLead(null)}
+              className="text-xs text-[#8C847C] hover:text-[#2D2926]"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-[11px] font-semibold text-[#8C847C] mb-1">Name</label>
+              <input
+                type="text"
+                value={editingLead.name}
+                onChange={(e) => setEditingLead({ ...editingLead, name: e.target.value })}
+                className="w-full bg-[#FAF8F5] border border-[#DDD6CB] rounded-lg px-3 py-1.5 text-xs"
+              />
             </div>
-
-            <form onSubmit={handleEditSubmit} className="space-y-3.5">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-[#2D2926] mb-1">Name</label>
-                  <input
-                    type="text"
-                    value={editingLead.name}
-                    onChange={(e) => setEditingLead({ ...editingLead, name: e.target.value })}
-                    className="w-full bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl px-3 py-2 text-xs text-[#2D2926] focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-[#2D2926] mb-1">Company</label>
-                  <input
-                    type="text"
-                    value={editingLead.company}
-                    onChange={(e) => setEditingLead({ ...editingLead, company: e.target.value })}
-                    className="w-full bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl px-3 py-2 text-xs text-[#2D2926] focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-[#2D2926] mb-1">Phone (E.164)</label>
-                  <input
-                    type="text"
-                    value={editingLead.phone}
-                    onChange={(e) => setEditingLead({ ...editingLead, phone: e.target.value })}
-                    className="w-full bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl px-3 py-2 text-xs text-[#2D2926] font-mono focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-[#2D2926] mb-1">Email</label>
-                  <input
-                    type="email"
-                    value={editingLead.email}
-                    onChange={(e) => setEditingLead({ ...editingLead, email: e.target.value })}
-                    className="w-full bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl px-3 py-2 text-xs text-[#2D2926] focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-[#2D2926] mb-1">Status</label>
-                  <select
-                    value={editingLead.status}
-                    onChange={(e) => setEditingLead({ ...editingLead, status: e.target.value as any })}
-                    className="w-full bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl px-3 py-2 text-xs text-[#2D2926] focus:outline-none"
-                  >
-                    <option value="Pending">Pending</option>
-                    <option value="Meeting Scheduled">Meeting Scheduled</option>
-                    <option value="Contacted">Contacted</option>
-                    <option value="Interested">Interested</option>
-                    <option value="Not Interested">Not Interested</option>
-                    <option value="Invalid Number">Invalid Number</option>
-                    <option value="Do Not Contact">Do Not Contact</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-[#2D2926] mb-1">Call Result</label>
-                  <input
-                    type="text"
-                    value={editingLead.callResult}
-                    onChange={(e) => setEditingLead({ ...editingLead, callResult: e.target.value })}
-                    className="w-full bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl px-3 py-2 text-xs text-[#2D2926] focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#2D2926] mb-1">Notes / Call Summary</label>
-                <textarea
-                  rows={2}
-                  value={editingLead.notes}
-                  onChange={(e) => setEditingLead({ ...editingLead, notes: e.target.value })}
-                  className="w-full bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl p-3 text-xs text-[#2D2926] focus:outline-none"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2 border-t border-[#E8E4DF]">
-                <button
-                  type="button"
-                  onClick={() => setEditingLead(null)}
-                  className="px-4 py-2 rounded-full bg-[#FAF9F6] border border-[#E8E4DF] text-xs font-semibold text-[#5C5651]"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 rounded-full bg-[#8BA888] text-white text-xs font-bold shadow-sm"
-                >
-                  Update Row
-                </button>
-              </div>
-            </form>
+            <div>
+              <label className="block text-[11px] font-semibold text-[#8C847C] mb-1">Company</label>
+              <input
+                type="text"
+                value={editingLead.company}
+                onChange={(e) => setEditingLead({ ...editingLead, company: e.target.value })}
+                className="w-full bg-[#FAF8F5] border border-[#DDD6CB] rounded-lg px-3 py-1.5 text-xs"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-[#8C847C] mb-1">Phone</label>
+              <input
+                type="text"
+                value={editingLead.phone}
+                onChange={(e) => setEditingLead({ ...editingLead, phone: e.target.value })}
+                className="w-full bg-[#FAF8F5] border border-[#DDD6CB] rounded-lg px-3 py-1.5 text-xs"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-[#8C847C] mb-1">Email</label>
+              <input
+                type="email"
+                value={editingLead.email}
+                onChange={(e) => setEditingLead({ ...editingLead, email: e.target.value })}
+                className="w-full bg-[#FAF8F5] border border-[#DDD6CB] rounded-lg px-3 py-1.5 text-xs"
+              />
+            </div>
           </div>
-        </div>
+
+          <div>
+            <label className="block text-[11px] font-semibold text-[#8C847C] mb-1">Notes / Remarks</label>
+            <input
+              type="text"
+              value={editingLead.notes || ''}
+              onChange={(e) => setEditingLead({ ...editingLead, notes: e.target.value })}
+              className="w-full bg-[#FAF8F5] border border-[#DDD6CB] rounded-lg px-3 py-1.5 text-xs"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setEditingLead(null)}
+              className="px-3 py-1.5 text-xs text-[#6C635B] hover:bg-[#FAF8F5] rounded-lg border border-[#DDD6CB]"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-1.5 text-xs font-semibold text-white bg-[#2D2926] hover:bg-[#1A1817] rounded-lg shadow-xs"
+            >
+              Update Lead
+            </button>
+          </div>
+        </form>
       )}
 
-      {/* Filter & Search Bar */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-        <div className="relative w-full sm:w-80">
-          <Search className="w-4 h-4 text-[#8C847C] absolute left-3.5 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search by name, company, phone, email..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-white border border-[#E8E4DF] rounded-full pl-9 pr-4 py-2 text-xs text-[#2D2926] placeholder-[#8C847C] focus:outline-none focus:ring-2 focus:ring-[#8BA888]/30 shadow-xs"
-          />
-        </div>
-
-        <div className="flex items-center space-x-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
-          <Filter className="w-3.5 h-3.5 text-[#8C847C] shrink-0" />
-          {['ALL', 'Pending', 'Meeting Scheduled', 'Contacted', 'Interested', 'Not Interested', 'Invalid Number'].map((st) => (
-            <button
-              key={st}
-              onClick={() => setFilterStatus(st)}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${
-                filterStatus === st
-                  ? 'bg-[#8BA888] text-white shadow-xs'
-                  : 'bg-white text-[#5C5651] hover:text-[#2D2926] hover:bg-[#F0EDE9] border border-[#E8E4DF]'
-              }`}
-            >
-              {st}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Bulk Selection Actions Bar */}
-      {selectedIds.length > 0 && (
-        <div className="p-3 rounded-2xl bg-[#2D2926] text-white flex items-center justify-between text-xs animate-in fade-in shadow-md">
-          <div className="flex items-center space-x-2">
-            <CheckSquare className="w-4 h-4 text-[#8BA888]" />
-            <span>
-              <strong>{selectedIds.length}</strong> of {filteredLeads.length} leads selected
-            </span>
-          </div>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => {
-                if (onStartCampaignWithSelected) {
-                  onStartCampaignWithSelected(selectedIds);
-                }
-              }}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-full bg-[#8BA888] hover:bg-[#799676] text-white font-bold"
-            >
-              <Play className="w-3 h-3 fill-current" />
-              <span>Call Selected Batch</span>
-            </button>
-
-            <button
-              onClick={() => {
-                selectedIds.forEach((id) => onDeleteLead(id));
-                setSelectedIds([]);
-              }}
-              className="px-3 py-1.5 rounded-full bg-rose-900/60 hover:bg-rose-800 text-rose-200 border border-rose-700"
-            >
-              Delete Selected
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Sheet Table */}
-      <div className="bg-white border border-[#E8E4DF] rounded-[28px] shadow-sm overflow-hidden">
+      {/* Main Leads Table */}
+      <div className="bg-white rounded-2xl border border-[#E8E4DF] shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="bg-[#FAF9F6] border-b border-[#E8E4DF] text-[#8C847C] font-semibold uppercase tracking-wider text-[11px]">
-                <th className="py-3.5 px-4 w-8">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.length === filteredLeads.length && filteredLeads.length > 0}
-                    onChange={toggleSelectAll}
-                    className="rounded text-[#8BA888] focus:ring-0 cursor-pointer"
-                  />
+              <tr className="bg-[#FAF8F5] border-b border-[#E8E4DF] text-[#7A7269] font-semibold">
+                <th className="py-3 px-3.5 w-10 text-center">
+                  <button
+                    onClick={toggleSelectAll}
+                    className="text-[#8C847C] hover:text-[#2D2926]"
+                    title="Select All"
+                  >
+                    {selectedIds.length === filteredLeads.length && filteredLeads.length > 0 ? (
+                      <CheckSquare className="w-4 h-4 text-[#25D366]" />
+                    ) : (
+                      <Square className="w-4 h-4" />
+                    )}
+                  </button>
                 </th>
-                <th className="py-3.5 px-4">Contact Name</th>
-                <th className="py-3.5 px-4">Company</th>
-                <th className="py-3.5 px-4">Sanitized Phone (E.164)</th>
-                <th className="py-3.5 px-4">Email</th>
-                <th className="py-3.5 px-4">Status</th>
-                <th className="py-3.5 px-4">Call Result</th>
-                <th className="py-3.5 px-4">Meeting Date</th>
-                <th className="py-3.5 px-4">Meeting Time</th>
-                <th className="py-3.5 px-4">Notes / Summary</th>
-                <th className="py-3.5 px-4">Last Called</th>
-                <th className="py-3.5 px-4 text-center">Action</th>
+                <th className="py-3 px-3">Contact & Company</th>
+                <th className="py-3 px-3">WhatsApp Number</th>
+                <th className="py-3 px-3">Email Address</th>
+                <th className="py-3 px-3">WhatsApp Status</th>
+                <th className="py-3 px-3">Email Status</th>
+                <th className="py-3 px-3">Lead Status</th>
+                <th className="py-3 px-3">Last Contacted</th>
+                <th className="py-3 px-3 text-right">Quick Dispatch & Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#E8E4DF]">
-              {filteredLeads.length === 0 ? (
-                <tr>
-                  <td colSpan={12} className="py-12 text-center text-[#8C847C]">
-                    <FileSpreadsheet className="w-8 h-8 text-[#8C847C]/40 mx-auto mb-2" />
-                    <p className="font-semibold text-sm text-[#2D2926]">No client records in this view</p>
-                    <p className="text-xs text-[#8C847C] mt-1">
-                      Click <strong className="text-[#8BA888]">"Feed Excel / CSV"</strong> above to upload your client spreadsheet.
-                    </p>
-                  </td>
-                </tr>
-              ) : (
-                filteredLeads.map((lead) => (
-                  <tr
-                    key={lead.id}
-                    className={`hover:bg-[#FAF9F6]/80 transition-colors group ${
-                      selectedIds.includes(lead.id) ? 'bg-[#8BA888]/5' : ''
-                    }`}
-                  >
-                    <td className="py-3.5 px-4">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(lead.id)}
-                        onChange={() => toggleSelectLead(lead.id)}
-                        className="rounded text-[#8BA888] focus:ring-0 cursor-pointer"
-                      />
-                    </td>
-                    <td className="py-3.5 px-4 font-bold text-[#2D2926] whitespace-nowrap">
-                      {lead.name}
-                    </td>
-                    <td className="py-3.5 px-4 text-[#5C5651] whitespace-nowrap">
-                      {lead.company}
-                    </td>
-                    <td className="py-3.5 px-4 font-mono text-[#2D2926] whitespace-nowrap">
-                      <div className="flex items-center space-x-1.5">
-                        <span>{lead.phone}</span>
-                        {!lead.isValidPhone && (
-                          <span title="Invalid phone format" className="text-rose-600">
-                            <AlertTriangle className="w-3.5 h-3.5" />
+            <tbody className="divide-y divide-[#F0ECE6]">
+              {filteredLeads.length > 0 ? (
+                filteredLeads.map((lead) => {
+                  const isSelected = selectedIds.includes(lead.id);
+
+                  return (
+                    <tr
+                      key={lead.id}
+                      className={`hover:bg-[#FAF9F6] transition-colors ${
+                        isSelected ? 'bg-[#25D366]/5' : ''
+                      }`}
+                    >
+                      {/* Checkbox */}
+                      <td className="py-3 px-3.5 text-center">
+                        <button
+                          onClick={() => toggleSelectLead(lead.id)}
+                          className="text-[#8C847C] hover:text-[#2D2926]"
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="w-4 h-4 text-[#25D366]" />
+                          ) : (
+                            <Square className="w-4 h-4" />
+                          )}
+                        </button>
+                      </td>
+
+                      {/* Name & Company */}
+                      <td className="py-3 px-3">
+                        <div className="font-semibold text-[#2D2926]">{lead.name}</div>
+                        <div className="text-[11px] text-[#7A7269]">{lead.company}</div>
+                      </td>
+
+                      {/* Phone */}
+                      <td className="py-3 px-3">
+                        <div className="font-mono text-[#2D2926] flex items-center gap-1">
+                          <span>{lead.phone}</span>
+                          {lead.isValidPhone ? (
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#25D366]" title="Valid E.164"></span>
+                          ) : (
+                            <span className="text-[10px] text-[#D93025]">Invalid</span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Email */}
+                      <td className="py-3 px-3">
+                        <div className="text-[#4A443F] truncate max-w-[180px]">{lead.email}</div>
+                      </td>
+
+                      {/* WhatsApp Status */}
+                      <td className="py-3 px-3">
+                        {lead.whatsAppStatus === 'Pending' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#F5F2EB] text-[#7A7269] border border-[#DDD6CB]">
+                            <Clock className="w-2.5 h-2.5" /> Pending
                           </span>
                         )}
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4 text-[#8C847C] whitespace-nowrap">
-                      {lead.email || '—'}
-                    </td>
-                    <td className="py-3.5 px-4 whitespace-nowrap">
-                      <span
-                        className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${getStatusBadge(
-                          lead.status
-                        )}`}
-                      >
-                        {lead.status}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4 text-[#5C5651] whitespace-nowrap font-medium">
-                      {lead.callResult || '—'}
-                    </td>
-                    <td className="py-3.5 px-4 text-[#537050] font-mono whitespace-nowrap font-bold">
-                      {lead.meetingDate || '—'}
-                    </td>
-                    <td className="py-3.5 px-4 text-[#537050] font-mono whitespace-nowrap font-bold">
-                      {lead.meetingTime || '—'}
-                    </td>
-                    <td className="py-3.5 px-4 text-[#5C5651] max-w-xs truncate" title={lead.notes}>
-                      {lead.notes || '—'}
-                    </td>
-                    <td className="py-3.5 px-4 text-[#8C847C] font-mono whitespace-nowrap text-[11px]">
-                      {lead.lastCalled || '—'}
-                    </td>
-                    <td className="py-3.5 px-4 text-center whitespace-nowrap">
-                      <div className="flex items-center justify-center space-x-1.5">
-                        <button
-                          id={`btn-call-row-${lead.id}`}
-                          onClick={() => onTriggerCall(lead.id)}
-                          className="flex items-center space-x-1 px-3 py-1.5 rounded-full bg-[#8BA888]/15 hover:bg-[#8BA888] text-[#537050] hover:text-white border border-[#8BA888]/30 text-[11px] font-bold transition-all shadow-xs"
-                          title="Call this lead now"
-                        >
-                          <Phone className="w-3 h-3" />
-                          <span>Call</span>
-                        </button>
+                        {lead.whatsAppStatus === 'Delivered' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#E8F5E9] text-[#128C7E] border border-[#C8E6C9]">
+                            <CheckCircle2 className="w-2.5 h-2.5 text-[#25D366]" /> Delivered
+                          </span>
+                        )}
+                        {lead.whatsAppStatus === 'Replied' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#E0F2FE] text-[#0369A1] border border-[#BAE6FD]">
+                            <MessageSquare className="w-2.5 h-2.5" /> Replied
+                          </span>
+                        )}
+                        {lead.whatsAppStatus === 'Failed' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#FDE8E8] text-[#9B1C1C] border border-[#F8B4B4]">
+                            <AlertTriangle className="w-2.5 h-2.5" /> Failed
+                          </span>
+                        )}
+                      </td>
 
-                        <button
-                          onClick={() => setEditingLead(lead)}
-                          className="p-1.5 rounded-full text-[#8C847C] hover:text-[#2D2926] hover:bg-[#E8E4DF]/50 transition-all opacity-0 group-hover:opacity-100"
-                          title="Edit row"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
+                      {/* Email Status */}
+                      <td className="py-3 px-3">
+                        {lead.emailStatus === 'Pending' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#F5F2EB] text-[#7A7269] border border-[#DDD6CB]">
+                            <Clock className="w-2.5 h-2.5" /> Pending
+                          </span>
+                        )}
+                        {(lead.emailStatus === 'Sent' || lead.emailStatus === 'Delivered') && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#E8F0FE] text-[#1967D2] border border-[#D2E3FC]">
+                            <Mail className="w-2.5 h-2.5 text-[#4285F4]" /> Sent
+                          </span>
+                        )}
+                        {(lead.emailStatus === 'Opened' || lead.emailStatus === 'Clicked') && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A]">
+                            <Sparkles className="w-2.5 h-2.5" /> {lead.emailStatus}
+                          </span>
+                        )}
+                        {lead.emailStatus === 'Failed' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#FDE8E8] text-[#9B1C1C] border border-[#F8B4B4]">
+                            <AlertTriangle className="w-2.5 h-2.5" /> Failed
+                          </span>
+                        )}
+                      </td>
 
-                        <button
-                          onClick={() => onDeleteLead(lead.id)}
-                          className="p-1.5 rounded-full text-[#8C847C] hover:text-rose-600 hover:bg-rose-50 transition-all opacity-0 group-hover:opacity-100"
-                          title="Delete row"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                      {/* Lead Status */}
+                      <td className="py-3 px-3">
+                        {lead.status === 'Meeting Scheduled' ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#FEF3C7] text-[#B45309] border border-[#FDE68A]">
+                            <Calendar className="w-2.5 h-2.5" /> {lead.meetingTime || 'Booked'}
+                          </span>
+                        ) : lead.status === 'Contacted' ? (
+                          <span className="text-[11px] font-medium text-[#128C7E]">Contacted</span>
+                        ) : (
+                          <span className="text-[11px] text-[#8C847C]">{lead.status}</span>
+                        )}
+                      </td>
+
+                      {/* Last Contacted */}
+                      <td className="py-3 px-3 text-[#7A7269] text-[11px]">
+                        {lead.lastContacted || '—'}
+                      </td>
+
+                      {/* Actions */}
+                      <td className="py-3 px-3 text-right">
+                        <div className="inline-flex items-center gap-1">
+                          {/* Quick WhatsApp Send */}
+                          <button
+                            id={`quick-wa-${lead.id}`}
+                            onClick={() => handleQuickWhatsApp(lead)}
+                            className="p-1.5 text-[#128C7E] hover:bg-[#E8F5E9] rounded-md transition-colors"
+                            title="Direct Send via WhatsApp"
+                          >
+                            <MessageSquare className="w-3.5 h-3.5 text-[#25D366]" />
+                          </button>
+
+                          {/* Quick Email Send */}
+                          <button
+                            id={`quick-em-${lead.id}`}
+                            onClick={() => handleQuickEmail(lead)}
+                            className="p-1.5 text-[#1967D2] hover:bg-[#E8F0FE] rounded-md transition-colors"
+                            title="Direct Send via Email"
+                          >
+                            <Mail className="w-3.5 h-3.5 text-[#4285F4]" />
+                          </button>
+
+                          {/* Open in Simulator */}
+                          <button
+                            id={`sim-${lead.id}`}
+                            onClick={() => onSelectLeadForSimulator(lead.id)}
+                            className="p-1.5 text-[#8C847C] hover:text-[#2D2926] hover:bg-[#FAF8F5] rounded-md transition-colors"
+                            title="Open in Chat & Email Previewer"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Edit */}
+                          <button
+                            onClick={() => setEditingLead(lead)}
+                            className="p-1.5 text-[#8C847C] hover:text-[#2D2926] hover:bg-[#FAF8F5] rounded-md transition-colors"
+                            title="Edit Contact"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Delete */}
+                          <button
+                            onClick={() => onDeleteLead(lead.id)}
+                            className="p-1.5 text-[#8C847C] hover:text-[#D93025] hover:bg-[#FDE8E8] rounded-md transition-colors"
+                            title="Delete Contact"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={9} className="py-10 text-center text-xs text-[#8C847C]">
+                    No contacts found matching the search filter.
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>

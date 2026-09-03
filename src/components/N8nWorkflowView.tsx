@@ -20,7 +20,65 @@ import { N8N_WORKFLOW_JSON, N8N_NODE_BREAKDOWN, NodeDocumentation } from '../dat
 export const N8nWorkflowView: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [selectedNodeIndex, setSelectedNodeIndex] = useState<number>(0);
-  const [viewMode, setViewMode] = useState<'visual' | 'json'>('visual');
+  const [viewMode, setViewMode] = useState<'visual' | 'json' | 'live_bridge' | 'managed_saas'>('visual');
+  const [webhookUrl, setWebhookUrl] = useState(() => {
+    return localStorage.getItem('n8n_live_webhook_url') || 'https://n8n.yourdomain.com/webhook/ai-voice-trigger';
+  });
+  const [testPayload, setTestPayload] = useState({
+    event: 'lead_campaign_trigger',
+    campaignId: 'camp-demo-01',
+    lead: {
+      name: 'Alex Morgan',
+      company: 'Acme AI Solutions',
+      phone: '+15551234567',
+      email: 'alex.morgan@acmesolutions.example',
+      status: 'Pending',
+    },
+    companyName: 'Apex AI Solutions',
+    timestamp: new Date().toISOString(),
+  });
+  const [isSending, setIsSending] = useState(false);
+  const [webhookResponse, setWebhookResponse] = useState<string | null>(null);
+  const [webhookStatus, setWebhookStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+  const handleSaveWebhookUrl = (url: string) => {
+    setWebhookUrl(url);
+    localStorage.setItem('n8n_live_webhook_url', url);
+  };
+
+  const handleSendTestWebhook = async () => {
+    setIsSending(true);
+    setWebhookResponse(null);
+    setWebhookStatus('idle');
+
+    try {
+      const res = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(testPayload),
+      });
+
+      const text = await res.text();
+      let formatted = text;
+      try {
+        formatted = JSON.stringify(JSON.parse(text), null, 2);
+      } catch {}
+
+      if (res.ok) {
+        setWebhookStatus('success');
+        setWebhookResponse(`Status: ${res.status} OK\n\nResponse:\n${formatted}`);
+      } else {
+        setWebhookStatus('error');
+        setWebhookResponse(`HTTP ${res.status}: ${res.statusText}\n\n${formatted}`);
+      }
+    } catch (err: unknown) {
+      const error = err as { message?: string };
+      setWebhookStatus('error');
+      setWebhookResponse(`Connection Failed: ${error.message || 'Check your n8n CORS settings or verify the webhook is active.'}`);
+    } finally {
+      setIsSending(false);
+    }
+  };
 
   const jsonString = JSON.stringify(N8N_WORKFLOW_JSON, null, 2);
 
@@ -35,7 +93,7 @@ export const N8nWorkflowView: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'ai_voice_calling_agent_n8n_workflow.json';
+    a.download = 'omnireach_ai_n8n_workflow.json';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -47,15 +105,15 @@ export const N8nWorkflowView: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Top Banner */}
-      <div className="bg-white border border-[#E8E4DF] rounded-[24px] p-6 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <div className="bg-white border border-[#E8E4DF] rounded-2xl p-6 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center space-x-2 text-xs font-semibold uppercase tracking-wider text-[#8C847C] mb-1">
-            <Network className="w-3.5 h-3.5 text-[#8BA888]" />
-            <span>n8n Production Workflow Template</span>
+            <Network className="w-3.5 h-3.5 text-[#25D366]" />
+            <span>n8n All-In-One Automation Hub</span>
           </div>
-          <h2 className="text-xl font-bold text-[#2D2926]">Full Automation Blueprint</h2>
+          <h2 className="text-xl font-bold text-[#2D2926]">Managed n8n Workflow & Live Webhook Bridge</h2>
           <p className="text-xs sm:text-sm text-[#5C5651] mt-0.5">
-            Import this workflow directly into your n8n instance (Self-Hosted or Cloud) to automate the entire end-to-end calling loop.
+            Ingest Excel spreadsheets, personalize messages using Gemini AI, dispatch via WhatsApp & Email, and sync Google Calendar demo bookings automatically.
           </p>
         </div>
 
@@ -63,7 +121,7 @@ export const N8nWorkflowView: React.FC = () => {
           <button
             id="btn-copy-n8n-json"
             onClick={handleCopy}
-            className="flex items-center space-x-1.5 px-4 py-2 rounded-full bg-[#8BA888] hover:bg-[#799676] text-white font-medium text-xs shadow-sm transition-all"
+            className="flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-[#25D366] hover:bg-[#1EBE5D] text-white font-medium text-xs shadow-xs transition-all"
           >
             {copied ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5" />}
             <span>{copied ? 'Copied to Clipboard!' : 'Copy Workflow JSON'}</span>
@@ -72,7 +130,7 @@ export const N8nWorkflowView: React.FC = () => {
           <button
             id="btn-download-n8n-json"
             onClick={handleDownload}
-            className="flex items-center space-x-1.5 px-4 py-2 rounded-full bg-[#FAF9F6] hover:bg-[#F0EDE9] border border-[#E8E4DF] text-[#4A443F] font-medium text-xs transition-all"
+            className="flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-[#FAF9F6] hover:bg-[#F0EDE9] border border-[#E8E4DF] text-[#4A443F] font-medium text-xs transition-all"
           >
             <Download className="w-3.5 h-3.5 text-[#8C847C]" />
             <span>Download JSON</span>
@@ -81,22 +139,46 @@ export const N8nWorkflowView: React.FC = () => {
       </div>
 
       {/* Mode Switcher */}
-      <div className="flex items-center space-x-2 border-b border-[#E8E4DF] pb-3">
+      <div className="flex items-center space-x-2 border-b border-[#E8E4DF] pb-3 overflow-x-auto no-scrollbar">
+        <button
+          onClick={() => setViewMode('managed_saas')}
+          className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all whitespace-nowrap ${
+            viewMode === 'managed_saas'
+              ? 'bg-[#8BA888] text-white shadow-sm'
+              : 'text-[#5C5651] hover:text-[#2D2926] hover:bg-[#F0EDE9]'
+          }`}
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          <span>Turnkey Client Model (Architecture)</span>
+        </button>
+
+        <button
+          onClick={() => setViewMode('live_bridge')}
+          className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all whitespace-nowrap ${
+            viewMode === 'live_bridge'
+              ? 'bg-[#8BA888] text-white shadow-sm'
+              : 'text-[#5C5651] hover:text-[#2D2926] hover:bg-[#F0EDE9]'
+          }`}
+        >
+          <PlayCircle className="w-3.5 h-3.5" />
+          <span>Live n8n Webhook Bridge & Tester</span>
+        </button>
+
         <button
           onClick={() => setViewMode('visual')}
-          className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-full text-xs font-medium transition-all ${
+          className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-full text-xs font-medium transition-all whitespace-nowrap ${
             viewMode === 'visual'
               ? 'bg-[#8BA888] text-white shadow-sm'
               : 'text-[#5C5651] hover:text-[#2D2926] hover:bg-[#F0EDE9]'
           }`}
         >
           <Layers className="w-3.5 h-3.5" />
-          <span>Interactive Node Inspector</span>
+          <span>Node Inspector</span>
         </button>
 
         <button
           onClick={() => setViewMode('json')}
-          className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-full text-xs font-medium transition-all ${
+          className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-full text-xs font-medium transition-all whitespace-nowrap ${
             viewMode === 'json'
               ? 'bg-[#8BA888] text-white shadow-sm'
               : 'text-[#5C5651] hover:text-[#2D2926] hover:bg-[#F0EDE9]'
@@ -107,7 +189,137 @@ export const N8nWorkflowView: React.FC = () => {
         </button>
       </div>
 
-      {viewMode === 'visual' ? (
+      {viewMode === 'managed_saas' ? (
+        <div className="space-y-6">
+          {/* Architecture Card */}
+          <div className="bg-white border border-[#E8E4DF] rounded-[24px] p-6 shadow-sm space-y-5">
+            <h3 className="text-base font-bold text-[#2D2926] flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-[#8BA888]" />
+              <span>How the "Done-For-You" Managed Model Works</span>
+            </h3>
+            <p className="text-xs sm:text-sm text-[#5C5651] leading-relaxed">
+              Your clients never have to see, configure, or manage n8n, Twilio, or Google Cloud APIs. You host the backend automation once; your clients only use this dashboard to upload their client lists and view booked appointments.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+              <div className="bg-[#FAF9F6] border border-[#E8E4DF] rounded-2xl p-4.5 space-y-2.5">
+                <div className="w-8 h-8 rounded-full bg-[#8BA888]/15 text-[#537050] font-bold flex items-center justify-center text-xs">
+                  1
+                </div>
+                <h4 className="font-bold text-sm text-[#2D2926]">Client Experience (Zero Tech)</h4>
+                <p className="text-xs text-[#5C5651] leading-relaxed">
+                  Client opens this dashboard, drags and drops their Excel spreadsheet or pastes leads, and clicks <strong>"Start Calling"</strong>.
+                </p>
+              </div>
+
+              <div className="bg-[#FAF9F6] border border-[#E8E4DF] rounded-2xl p-4.5 space-y-2.5">
+                <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-xs">
+                  2
+                </div>
+                <h4 className="font-bold text-sm text-[#2D2926]">Your Backend (n8n Engine)</h4>
+                <p className="text-xs text-[#5C5651] leading-relaxed">
+                  The dashboard instantly triggers your central n8n instance via webhook. n8n executes the AI voice calls, evaluates responses with Gemini, and queries Google Calendar.
+                </p>
+              </div>
+
+              <div className="bg-[#FAF9F6] border border-[#E8E4DF] rounded-2xl p-4.5 space-y-2.5">
+                <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-700 font-bold flex items-center justify-center text-xs">
+                  3
+                </div>
+                <h4 className="font-bold text-sm text-[#2D2926]">Outcome & Monetization</h4>
+                <p className="text-xs text-[#5C5651] leading-relaxed">
+                  Meetings appear automatically on the client's Google Calendar with Meet links. The client downloads the updated Excel sheet with all call notes. You bill them a monthly retainer + setup fee.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : viewMode === 'live_bridge' ? (
+        /* Live n8n Webhook Bridge & Tester */
+        <div className="space-y-6">
+          <div className="bg-white border border-[#E8E4DF] rounded-[24px] p-6 shadow-sm space-y-5">
+            <div>
+              <h3 className="text-base font-bold text-[#2D2926] flex items-center gap-2">
+                <PlayCircle className="w-5 h-5 text-[#8BA888]" />
+                <span>Live n8n Webhook Endpoint Connector</span>
+              </h3>
+              <p className="text-xs sm:text-sm text-[#5C5651] mt-1">
+                Enter your live n8n Production or Test Webhook URL below. When your clients upload spreadsheets or launch campaigns, the dashboard can dispatch leads directly to this webhook.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-[#4A443F]">n8n Webhook URL</label>
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  value={webhookUrl}
+                  onChange={(e) => handleSaveWebhookUrl(e.target.value)}
+                  placeholder="https://your-n8n-instance.com/webhook/ai-voice-trigger"
+                  className="flex-1 bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl px-3.5 py-2.5 text-xs font-mono text-[#2D2926] focus:outline-none focus:ring-2 focus:ring-[#8BA888]/30"
+                />
+                <button
+                  onClick={handleSendTestWebhook}
+                  disabled={isSending || !webhookUrl}
+                  className="px-5 py-2.5 rounded-xl bg-[#8BA888] hover:bg-[#799676] text-white font-bold text-xs shadow-sm transition-all disabled:opacity-50 flex items-center gap-2 whitespace-nowrap"
+                >
+                  {isSending ? (
+                    <>
+                      <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      <span>Dispatching...</span>
+                    </>
+                  ) : (
+                    <>
+                      <PlayCircle className="w-4 h-4" />
+                      <span>Test Dispatch to n8n</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Test Payload Preview */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-2">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[#4A443F]">Outbound Payload (Sent to n8n)</span>
+                  <span className="text-[10px] font-mono text-[#8C847C]">POST JSON</span>
+                </div>
+                <pre className="bg-[#FAF9F6] border border-[#E8E4DF] rounded-xl p-3.5 text-[11px] font-mono text-[#2D2926] overflow-x-auto max-h-60 leading-relaxed">
+                  {JSON.stringify(testPayload, null, 2)}
+                </pre>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[#4A443F]">n8n Webhook Response</span>
+                  {webhookStatus === 'success' && (
+                    <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                      200 OK
+                    </span>
+                  )}
+                  {webhookStatus === 'error' && (
+                    <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200">
+                      Error
+                    </span>
+                  )}
+                </div>
+                <pre
+                  className={`border rounded-xl p-3.5 text-[11px] font-mono overflow-x-auto max-h-60 leading-relaxed ${
+                    webhookStatus === 'success'
+                      ? 'bg-emerald-50/50 border-emerald-200 text-emerald-950'
+                      : webhookStatus === 'error'
+                      ? 'bg-rose-50/50 border-rose-200 text-rose-950'
+                      : 'bg-[#FAF9F6] border-[#E8E4DF] text-[#8C847C]'
+                  }`}
+                >
+                  {webhookResponse || '// Click "Test Dispatch to n8n" to trigger your live webhook and view the response here.'}
+                </pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : viewMode === 'visual' ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Node Pipeline List (Left) */}
           <div className="lg:col-span-5 space-y-3">
@@ -169,37 +381,47 @@ export const N8nWorkflowView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Purpose */}
+              {/* Description */}
               <div className="space-y-1.5">
                 <h4 className="text-xs font-semibold text-[#2D2926] flex items-center gap-1.5">
-                  <Info className="w-3.5 h-3.5 text-[#8BA888]" />
+                  <Info className="w-3.5 h-3.5 text-[#25D366]" />
                   Functional Purpose
                 </h4>
                 <p className="text-xs text-[#5C5651] leading-relaxed bg-[#FAF9F6] p-3.5 rounded-2xl border border-[#E8E4DF]">
-                  {currentNodeDoc.purpose}
+                  {currentNodeDoc.description}
                 </p>
               </div>
 
-              {/* Key Config */}
-              <div className="space-y-1.5">
-                <h4 className="text-xs font-semibold text-[#2D2926] flex items-center gap-1.5">
-                  <Settings className="w-3.5 h-3.5 text-amber-600" />
-                  Key Parameters & Expressions
-                </h4>
-                <div className="bg-[#FAF9F6] p-3.5 rounded-2xl border border-[#E8E4DF] font-mono text-xs text-[#2D2926] whitespace-pre-wrap leading-relaxed">
-                  {currentNodeDoc.keyConfig}
+              {/* Input / Output */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                <div className="p-3 bg-[#FAF9F6] rounded-xl border border-[#E8E4DF]">
+                  <span className="font-semibold text-[#8C847C] uppercase text-[10px] block mb-1">
+                    Input Data
+                  </span>
+                  <span className="text-[#2D2926]">{currentNodeDoc.input}</span>
+                </div>
+                <div className="p-3 bg-[#FAF9F6] rounded-xl border border-[#E8E4DF]">
+                  <span className="font-semibold text-[#8C847C] uppercase text-[10px] block mb-1">
+                    Output Data
+                  </span>
+                  <span className="text-[#2D2926]">{currentNodeDoc.output}</span>
                 </div>
               </div>
 
-              {/* Error Handling & Edge Cases */}
+              {/* Setup Instructions */}
               <div className="space-y-1.5">
                 <h4 className="text-xs font-semibold text-[#2D2926] flex items-center gap-1.5">
-                  <ShieldCheck className="w-3.5 h-3.5 text-[#8BA888]" />
-                  Safety Guardrails & Error Handling
+                  <Settings className="w-3.5 h-3.5 text-[#128C7E]" />
+                  Setup & Parameter Configuration
                 </h4>
-                <p className="text-xs text-[#5C5651] leading-relaxed bg-[#FAF9F6] p-3.5 rounded-2xl border border-[#E8E4DF]">
-                  {currentNodeDoc.errorHandling}
-                </p>
+                <ul className="space-y-1 bg-[#FAF9F6] p-3.5 rounded-2xl border border-[#E8E4DF] text-xs text-[#5C5651]">
+                  {currentNodeDoc.setupInstructions.map((inst, i) => (
+                    <li key={i} className="flex items-start gap-1.5">
+                      <span className="text-[#25D366] font-bold">•</span>
+                      <span>{inst}</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
             </div>
           </div>

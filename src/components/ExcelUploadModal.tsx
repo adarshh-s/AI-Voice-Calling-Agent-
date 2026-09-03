@@ -131,10 +131,10 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
   const downloadSampleExcel = () => {
     const csvContent =
       'Name,Company,Phone,Email,Notes\n' +
-      'Alex Morgan,Acme AI Solutions,9876543211,alex.morgan@acmesolutions.example,Interested in automated voice dialer\n' +
-      'John Doe,Global Logistics,+15551234567,john@globallogistics.com,Follow-up demo for Q3\n' +
+      'Alex Morgan,Acme AI Solutions,9876543211,alex.morgan@acmesolutions.example,Interested in automated WhatsApp & Email outreach\n' +
+      'John Doe,Global Logistics,+15551234567,john@globallogistics.com,Follow-up demo for Q3 calendar invite\n' +
       'Sarah Connor,Cyberdyne Systems,+447911123456,sarah@cyberdyne.org,Requested pricing overview\n' +
-      'Rajesh Kumar,TechCorp India,9876543210,rajesh@techcorp.in,Wants afternoon slot\n';
+      'Rajesh Kumar,TechCorp India,9876543210,rajesh@techcorp.in,Wants WhatsApp demo link\n';
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -152,15 +152,15 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
         {/* Header */}
         <div className="px-6 py-5 border-b border-[#E8E4DF] flex items-center justify-between bg-[#FAF9F6]">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#8BA888]/15 border border-[#8BA888]/30 flex items-center justify-center text-[#537050]">
+            <div className="w-10 h-10 rounded-2xl bg-[#25D366]/15 border border-[#25D366]/30 flex items-center justify-center text-[#128C7E]">
               <FileSpreadsheet className="w-5 h-5" />
             </div>
             <div>
               <h3 className="font-bold text-[#2D2926] text-base">
-                Feed Client Spreadsheet (Excel / CSV)
+                Import Client Spreadsheet (Excel / CSV)
               </h3>
               <p className="text-xs text-[#8C847C]">
-                Auto-sanitize phone numbers into E.164 and prepare automated calling batch
+                Auto-sanitize phone numbers for WhatsApp, validate emails, and prepare automated outreach
               </p>
             </div>
           </div>
